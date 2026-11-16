@@ -1,0 +1,43 @@
+# EventForge commit message template — Conventional Commits + Jira
+#
+# REQUIRED SUBJECT FORMAT:
+#   <type>(<scope>): <imperative summary> [<JIRA-KEY>]
+#
+# Replace <JIRA-KEY> with the real Jira issue key from this project.
+# EVF-123 is an EXAMPLE only; use the actual key assigned by Jira.
+# Prefer <= 72 characters for the subject when practical.
+# Keep the type and scope lowercase. The scope is optional.
+#
+# Types:
+#   feat      new user-visible or architectural capability
+#   fix       defect correction
+#   docs      documentation-only change
+#   test      tests or test fixtures
+#   refactor  code restructuring without behavior changes
+#   perf      measured performance improvement
+#   build     build tooling or dependency changes
+#   ci        continuous integration changes
+#   chore     repository maintenance
+#
+# Suggested scopes: workflow, event-store, projections, replay,
+#                   api, infrastructure, architecture, repo
+#
+# EXAMPLES (replace EVF-* with real Jira issue keys):
+#   docs(architecture): document event-store design [EVF-1]
+#   chore(repo): add Jira-aware Git templates [EVF-2]
+#   feat(workflow): implement task aggregate [EVF-3]
+#   fix(projections): prevent stale writes [EVF-4]
+#   test(replay): cover projection rebuild [EVF-5]
+#
+# OPTIONAL BODY (after a blank line):
+#   Why is this change needed?
+#   What architectural decisions or risks matter?
+#   How was it verified? (State only what was actually run.)
+#
+# Breaking changes must include an explanatory footer:
+#   BREAKING CHANGE: <impact and required migration>
+#
+# The Jira key in the subject enables traceability. Automatic linking
+# depends on the Jira/GitHub integration being configured.
+# Avoid speculative implementation or test claims.
+# Never commit confidential code, customer data, or secrets.
