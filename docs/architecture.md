@@ -31,7 +31,7 @@ flowchart TB
     subgraph Process[Single .NET process]
         API[API adapter / HTTP endpoints]
         Simulator[Execution simulation adapter]
-        subgraph Workflow[Task Workflow — domain boundary]
+        subgraph Workflow[Task Workflow bounded context]
             Handlers[Command & query handlers]
             Aggregate[Task aggregate + pure decision/apply logic]
             Projection[Task overview projector]
@@ -46,6 +46,8 @@ flowchart TB
     Infra --> PG[(PostgreSQL: event streams + read model)]
     Projection --> PG
 ```
+
+Arrows show conceptual execution flow, not source-code dependencies. The bounded context includes application orchestration and projection ownership; SQL access remains in infrastructure adapters. The aggregate is pure, and handlers access persistence through application contracts implemented by infrastructure.
 
 ### Ownership rules
 
@@ -173,14 +175,25 @@ sequenceDiagram
     C->>A: Command + expectedVersion
     A->>P: Load ordered task events
     P-->>A: Existing event stream
-    A->>D: Rehydrate state; decide command
+    A->>D: Rehydrate state and decide command
     D-->>A: New domain event(s) or rejection
-    A->>P: BEGIN TRANSACTION
-    A->>P: Append events with stream-version constraint
-    A->>R: Apply new events to task overview
-    R->>P: Upsert read model in same transaction
-    A->>P: COMMIT (or ROLLBACK on any error)
-    A-->>C: Success / domain error / HTTP 409
+    alt Command rejected
+        A-->>C: Domain error with no writes
+    else Command accepted
+        A->>P: BEGIN TRANSACTION
+        A->>P: Append events with stream-version constraint
+        opt Append succeeds
+            A->>R: Apply new events to task overview
+            R->>P: Upsert read model in same transaction
+        end
+        alt Append or projection fails
+            A->>P: ROLLBACK
+            A-->>C: Error / HTTP 409 for version conflict
+        else Writes succeed
+            A->>P: COMMIT
+            A-->>C: Success after commit
+        end
+    end
 ```
 
 Domain logic is conceptually `Decide(state, command) -> events | error` and `Apply(state, event) -> state`. Both are pure and deterministic for fixed inputs. Decide validates current intent; Apply folds historical facts without re-running command validation against current rules. Neither reads ambient state or performs I/O. Values that would otherwise be nondeterministic (clock reads, random IDs, external test results) are supplied at the command boundary and recorded in events.
