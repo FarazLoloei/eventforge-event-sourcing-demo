@@ -84,14 +84,20 @@ The `Task` aggregate is the write-side consistency boundary. It accepts explicit
 | --- | --- | --- |
 | `CreateTask` | `TaskCreated` | A task identifier must not already exist. |
 | `AssignTask` | `TaskAssigned` | Task exists and is not yet assigned or completed. |
-| `RecordCodeGenerated` | `CodeGenerated` | Task is assigned and not completed; associates an opaque `generationId`. |
-| `RecordTestsPassed` | `TestsPassed` | Outcome refers to the **current** generation. |
-| `RecordTestsFailed` | `TestsFailed` | Outcome refers to the **current** generation. |
-| `CompleteTask` | `TaskCompleted` | The current generation has passed tests and task is not already completed. |
+| `RecordCodeGenerated` | `CodeGenerated` | Task exists, is assigned, and is not completed; `generationId` must be new within this task. |
+| `RecordTestsPassed` | `TestsPassed` | Task exists and is not completed; outcome identifies the **current**, previously recorded generation. |
+| `RecordTestsFailed` | `TestsFailed` | Task exists and is not completed; outcome identifies the **current**, previously recorded generation. |
+| `CompleteTask` | `TaskCompleted` | Task exists, is assigned, and is not completed; the latest test outcome for its current generation is passed. |
 
-A later `CodeGenerated` event supersedes any prior test outcome. Therefore, a `TestsPassed(g1)` followed by `CodeGenerated(g2)` cannot authorize completion until `TestsPassed(g2)` is recorded.
+Completion is terminal: after `TaskCompleted`, reject every workflow command, including repeated completion, assignment, generation, and test-result commands. Queries remain available. Assignment requires an existing, unassigned, incomplete task; generation requires that assignment first. No reassignment or reopening command is defined.
+
+Generation identifiers are opaque and unique within a task, including superseded generations. Reusing an identifier is invalid even if the artifact reference differs. The aggregate reconstructs the set of used identifiers from history. Reject test results before any generation exists, for unknown identifiers, or for a superseded generation.
+
+A later `CodeGenerated` event makes its generation current and resets the current test outcome to absent; earlier outcomes remain immutable history. Therefore, `TestsPassed(g1)` followed by `CodeGenerated(g2)` cannot authorize completion until `TestsPassed(g2)` is recorded. Completion requires the latest outcome to be passed, not merely a pass somewhere in history.
 
 Commands that violate a domain rule return a validation/conflict result and append **no events**. The same semantic decision should be testable without PostgreSQL or HTTP.
+
+These invariant clarifications are requested by EVF-8. Any further domain policy, such as restricting repeated test results for the current generation or adding reassignment/reopening, requires explicit owner approval and an authorized ADR before adoption. This task does not introduce those policies.
 
 ### Illustrative event envelope
 
@@ -146,6 +152,8 @@ The stable `eventType` and numeric `schemaVersion` identify a logical event cont
 - For a multi-event command, all appended versions and projection changes succeed or fail **as one PostgreSQL transaction**.
 
 Append assigns contiguous versions starting at expectedVersion + 1. Stale commands are rejected without automatic retries: callers must reload and reassess intent. Stream concurrency does not provide durable request deduplication.
+
+Optimistic concurrency answers whether the stream has changed since the caller's expected version. Durable request idempotency would recognize the same request across retries and return its recorded result without executing it again. A retry after a lost response may encounter a version conflict or domain rejection; neither establishes the original request's outcome. Generation-ID uniqueness is a domain invariant, not request deduplication. Durable request idempotency remains deferred.
 
 The initial design relies on **optimistic concurrency and unique constraints**, not mandatory advisory locks. Advisory transaction locks are a possible later optimization if contention or ordering requires them; they are not needed to make the initial single-stream append safe.
 
@@ -211,6 +219,42 @@ An online rebuild would need shadow projections, a **commit-safe** method to cap
 ### Event contract changes
 
 Every stored event has `eventType` and `schemaVersion` from the start. In the MVP, explicit **upcasters** will transform old serialized contracts to a canonical in-memory representation without rewriting historical event rows. Contract fixtures and compatibility tests will verify both historical and current versions. Upcasters are pure, deterministic transformations explicitly chained by event type and schema version. Unknown versions or missing steps fail closed. Historical rows remain unchanged. Old/current fixtures must yield equivalent aggregate state and projections. Implementation has not started.
+
+#### Synthetic example: `CodeGenerated` v1 to v2
+
+This illustrative schema evolution renames `artifactRef` to `artifactReference` without changing its meaning. It is a proposed compatibility example, not an existing migration or an adopted production contract. The v1 envelope in section 3 remains a valid historical example.
+
+Stored v1 contract (identity and other envelope fields omitted here only for brevity):
+
+```json
+{
+  "eventType": "CodeGenerated",
+  "schemaVersion": 1,
+  "payload": {
+    "generationId": "g2",
+    "artifactRef": "synthetic://artifacts/task-123/g2"
+  }
+}
+```
+
+Canonical v2 representation in memory:
+
+```json
+{
+  "eventType": "CodeGenerated",
+  "schemaVersion": 2,
+  "payload": {
+    "generationId": "g2",
+    "artifactReference": "synthetic://artifacts/task-123/g2"
+  }
+}
+```
+
+The pure transformation copies `generationId` unchanged and maps `artifactReference := v1.payload.artifactRef` exactly. It changes only the in-memory schema version and field name, preserving event ID, stream identity/version, metadata, and recorded time. It performs no I/O, clock reads, random generation, artifact lookup, or mutation of its input. Identical valid inputs produce identical outputs. Stored v1 bytes remain unchanged; upcasting never appends a replacement event.
+
+Validate the declared source shape before conversion and the target shape afterward. Missing or malformed required fields fail explicitly; never generate a missing generation ID, infer an artifact, or add an unrecorded timestamp, agent, or test outcome. A future required fact unavailable in old history needs a separately approved compatibility design; an upcaster cannot invent it. In this example the supported reader accepts v1 through the explicit v1-to-v2 step and validates v2 directly. Reject every other version, unknown event type, or missing chain step with event identity and version diagnostics; stop load/replay and leave any rebuild candidate inactive.
+
+**Fixture equivalence (planned):** Pair a complete synthetic v1 history containing this event with an otherwise identical history using its v2 representation, preserving envelope identities and stream positions. Both must normalize to the same canonical events and fold to identical aggregate state (including used generation IDs and current test outcome) and all task overview business fields and final stream versions. Check against independently authored expected results at matching history boundaries, including after `g2` clears a prior `g1` pass and after a `g2` result permits completion. Fixtures must also show deterministic repeated conversion, unchanged source data, and explicit failure for malformed payloads, unsupported versions, and missing upcaster steps. These are acceptance requirements, not implemented tests.
 
 ### Snapshots
 
