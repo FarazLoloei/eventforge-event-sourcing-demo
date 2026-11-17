@@ -145,6 +145,8 @@ The stable `eventType` and numeric `schemaVersion` identify a logical event cont
 - A unique database constraint on the stream/version tuple is the final write-race safeguard, even if two writers observed the same old version.
 - For a multi-event command, all appended versions and projection changes succeed or fail **as one PostgreSQL transaction**.
 
+Append assigns contiguous versions starting at expectedVersion + 1. Stale commands are rejected without automatic retries: callers must reload and reassess intent. Stream concurrency does not provide durable request deduplication.
+
 The initial design relies on **optimistic concurrency and unique constraints**, not mandatory advisory locks. Advisory transaction locks are a possible later optimization if contention or ordering requires them; they are not needed to make the initial single-stream append safe.
 
 ## 5. CQRS flows
@@ -171,7 +173,7 @@ sequenceDiagram
     A-->>C: Success / domain error / HTTP 409
 ```
 
-Domain logic is conceptually `Decide(state, command) -> events | error` and `Apply(state, event) -> state`. Both are deterministic for fixed inputs. Values that would otherwise be nondeterministic (clock reads, random IDs, external test results) are supplied at the command boundary and recorded in events.
+Domain logic is conceptually `Decide(state, command) -> events | error` and `Apply(state, event) -> state`. Both are pure and deterministic for fixed inputs. Decide validates current intent; Apply folds historical facts without re-running command validation against current rules. Neither reads ambient state or performs I/O. Values that would otherwise be nondeterministic (clock reads, random IDs, external test results) are supplied at the command boundary and recorded in events.
 
 **Atomicity invariant:** in the MVP, a successful event append and its corresponding task overview update are part of the same local transaction. A projection failure aborts the event append. This provides immediately consistent **local** reads without a message broker. It does not imply distributed transaction guarantees.
 
@@ -179,20 +181,28 @@ Domain logic is conceptually `Decide(state, command) -> events | error` and `App
 
 `GET /tasks/{id}` (planned) queries the `task_overview` projection; it does not deserialize the full event stream on every request. `GET /tasks/{id}/events` (planned, for inspection/demo) exposes safe, synthetic event metadata. Public API shape remains provisional until the API task is implemented.
 
-A proposed `task_overview` row contains `task_id`, `status`, `assigned_agent_id`, `current_generation_id`, `latest_test_result`, and `last_stream_version`. The projector is a deterministic reducer. A version guard prevents applying a repeated event twice and detects out-of-order application rather than silently inventing state.
+A proposed `task_overview` row contains `task_id`, `status`, `assigned_agent_id`, `current_generation_id`, `latest_test_result`, and `last_stream_version`. The projector is a deterministic reducer. A version guard requires the next contiguous stream version and rejects duplicates or gaps, rolling back the transaction. Rebuilds start each stream at version zero. Task-local projections require no ordering across streams. Success is returned only after commit; immediately consistent reads assume the primary database, not a lagging replica.
 
 ## 6. Replay, rebuilding, and schema evolution
 
 ### MVP: controlled offline projection rebuild
 
-1. Put the application in maintenance mode or stop normal command writes.
-2. Create an empty replacement task overview (prefer a shadow table over destructive in-place truncation).
-3. Enumerate task event streams and replay each in **stream-version order**, applying a pure projector.
-4. Verify counts, final per-stream versions, and a deterministic comparison of expected read-model fields.
-5. Switch the query source to the rebuilt view/table, then resume writes.
-6. If verification fails, keep the original read model and report a rebuild failure.
+1. Pause all command writers and drain in-flight transactions. Keep writes paused through validation and cutover.
+2. Create an empty shadow projection. Record the projector/upcaster versions and authoritative stream inventory with terminal stream versions.
+3. Upcast supported contracts and replay each stream in contiguous stream-version order. Reject gaps, unknown contracts, malformed events, or reducer failures.
+4. Validate the candidate against history: one row per task stream, no extra rows, matching terminal versions, and expected status, assignment, generation, and test outcome derived from recorded facts. Independent reference folds and known-history fixtures must test these expectations; repeating the same projector alone cannot detect its own logic defects.
+5. Produce a deterministic diff and apply the scenario criteria below. Cut over only after candidate validation succeeds, using an atomic table/view switch and retaining the previous table for rollback.
+6. Check that command-side projection updates and queries target the replacement before resuming writes. On failure, leave the candidate inactive and report diagnostics. A damaged baseline remains unavailable for trusted queries until recovery succeeds.
 
-**Replay never triggers real-world effects.** Historical `CodeGenerated` and `TestsPassed` events only update in-memory state and rebuilt projections; they never call agents, regenerate artifacts, or rerun tests.
+**Verification:** For a healthy projection, compare the candidate against the baseline at the same source boundary and projection contract. Require zero semantic differences and successful history validation. This demonstrates equivalence for the tested history.
+
+**Recovery:** For a damaged projection, report discrepancies against the baseline, then validate the replacement against authoritative history and reference expectations before cutover. Equality with the corrupted projection is not a recovery condition. If history itself is damaged or unsupported, stop: rebuilding a projection cannot repair the source of truth.
+
+### Deterministic projection diffing
+
+Compare the complete key set sorted by task_id and these fields: status, assigned_agent_id, current_generation_id, latest_test_result, and last_stream_version. Use canonical UUID/text representations, ordinal comparisons, explicit nulls, and stable field/report ordering. Exclude only operational metadata such as rebuild timestamps, never business fields. Report missing/extra rows and per-field before/after values; counts or hashes alone are insufficient. Repeating the diff on identical inputs must produce identical output. Projection contract changes require an explicit comparison mapping before equivalence checks.
+
+**Replay never triggers real-world effects.** Historical events update state and projections only; replay never calls agents, regenerates artifacts, reruns tests, sends notifications, or dispatches external work. A dedicated replay path excludes side-effect handlers and is tested using adapters that fail if invoked. Maintenance operations such as cutover are outside event application.
 
 ### Future: replay under active load
 
@@ -200,7 +210,7 @@ An online rebuild would need shadow projections, a **commit-safe** method to cap
 
 ### Event contract changes
 
-Every stored event has `eventType` and `schemaVersion` from the start. In a later phase, explicit **upcasters** will transform old serialized contracts to a canonical in-memory representation without rewriting historical event rows. Contract fixtures and compatibility tests will verify both historical and current versions. No upcaster implementation is part of the initial documentation milestone.
+Every stored event has `eventType` and `schemaVersion` from the start. In the MVP, explicit **upcasters** will transform old serialized contracts to a canonical in-memory representation without rewriting historical event rows. Contract fixtures and compatibility tests will verify both historical and current versions. Upcasters are pure, deterministic transformations explicitly chained by event type and schema version. Unknown versions or missing steps fail closed. Historical rows remain unchanged. Old/current fixtures must yield equivalent aggregate state and projections. Implementation has not started.
 
 ### Snapshots
 
@@ -215,7 +225,7 @@ Snapshots are a **planned optimization** for aggregate hydration: `(stream_id, l
 | Projection write fails | Roll back event append and projection changes together. |
 | API crashes before commit | No partial committed command. |
 | API crashes after commit but before response | Caller may be uncertain; later request-id idempotency will address safe retries. |
-| Old event contract | Later upcaster reads the historical version; incompatible changes must fail explicitly. |
+| Old event contract | MVP upcaster reads the supported historical version; incompatible changes must fail explicitly. |
 | Replay encounters malformed event | Stop with diagnostic details; do not silently skip or mutate the authoritative log. |
 
 **MVP baseline:** optimistic concurrency and transaction rollback. **Later hardening:** durable idempotency keys, duplicate-request result caching, tested retries, and online rebuild/cutover. The API must not claim effectively-once command behavior before idempotency has been implemented and tested.
@@ -234,9 +244,9 @@ Snapshots are a **planned optimization** for aggregate hydration: `(stream_id, l
 
 Event Sourcing is intentionally applied to a **workflow with meaningful history**, not to every table indiscriminately. If future requirements demand independent scaling, external integrations, or cross-module workflows, those decisions should be justified with measured evidence and separate ADRs.
 
-## 9. Quality gates and future agent guardrails
+## 9. MVP quality gates and engineering guardrails
 
-The implementation will introduce unit tests for pure domain rules, PostgreSQL integration tests for transactions/concurrency, replay equivalence tests, and CI validation. Future real-agent contributions would be required to respect module boundaries, pass deterministic checks, avoid secrets in events, and undergo human code review. Automated agents will not be authorized to bypass domain commands or directly modify the event log.
+The implementation will introduce unit tests for pure domain rules, PostgreSQL integration tests for transactions/concurrency, replay equivalence tests, and CI validation. MVP architecture tests enforce domain independence from HTTP, persistence, and simulation, plus allowed module dependencies. MVP engineering guardrails require build/test checks, synthetic fixtures, no secrets in events, and human review, including agent-produced changes. Tests and checks land alongside each capability without requiring real-agent integration. Automated agents will not be authorized to bypass domain commands or directly modify the event log.
 
 ## 10. Related documents
 
