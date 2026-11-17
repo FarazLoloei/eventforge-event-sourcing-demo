@@ -6,7 +6,7 @@ EventForge is documentation-only; implementation has not started. These are engi
 
 - Read the [architecture proposal](docs/architecture.md), [roadmap](docs/roadmap.md), and [ADR 0001](docs/adr/0001-architecture.md) before making changes. Follow their current proposed baseline and preserve decision history.
 - Inspect repository context and edit/validate only files authorized by the active task. Keep changes focused, preserve unrelated work, and report scope conflicts before expanding edits.
-- Do not start Phase 2 or add application code without explicit project-owner authorization. EVF-4 authorizes only this file and a short README reference.
+- Do not start Phase 2 or add application code without explicit project-owner authorization.
 - Obtain explicit project-owner approval before adopting significant architectural changes: technology, module ownership, event contracts/semantics, consistency guarantees, or replay/cutover strategy. Prepare rationale, alternatives, impacts, validation, and migration/rollback needs for review; record the approved decision in an authorized ADR with a dated history entry.
 - Never create or switch branches, stage, commit, push, merge, create Pull Requests, or modify Jira. Read-only Git inspection is permitted. Human approval of a design does not grant these operations.
 - Preserve [.gitmessage](.gitmessage), the [Pull Request template](.github/PULL_REQUEST_TEMPLATE.md), and [.gitignore](.gitignore).

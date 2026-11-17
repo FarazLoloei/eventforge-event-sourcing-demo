@@ -31,7 +31,7 @@ flowchart TB
     subgraph Process[Single .NET process]
         API[API adapter / HTTP endpoints]
         Simulator[Execution simulation adapter]
-        subgraph Workflow[Task Workflow — domain boundary]
+        subgraph Workflow[Task Workflow bounded context]
             Handlers[Command & query handlers]
             Aggregate[Task aggregate + pure decision/apply logic]
             Projection[Task overview projector]
@@ -46,6 +46,8 @@ flowchart TB
     Infra --> PG[(PostgreSQL: event streams + read model)]
     Projection --> PG
 ```
+
+Arrows show conceptual execution flow, not source-code dependencies. The bounded context includes application orchestration and projection ownership; SQL access remains in infrastructure adapters. The aggregate is pure, and handlers access persistence through application contracts implemented by infrastructure.
 
 ### Ownership rules
 
@@ -84,14 +86,20 @@ The `Task` aggregate is the write-side consistency boundary. It accepts explicit
 | --- | --- | --- |
 | `CreateTask` | `TaskCreated` | A task identifier must not already exist. |
 | `AssignTask` | `TaskAssigned` | Task exists and is not yet assigned or completed. |
-| `RecordCodeGenerated` | `CodeGenerated` | Task is assigned and not completed; associates an opaque `generationId`. |
-| `RecordTestsPassed` | `TestsPassed` | Outcome refers to the **current** generation. |
-| `RecordTestsFailed` | `TestsFailed` | Outcome refers to the **current** generation. |
-| `CompleteTask` | `TaskCompleted` | The current generation has passed tests and task is not already completed. |
+| `RecordCodeGenerated` | `CodeGenerated` | Task exists, is assigned, and is not completed; `generationId` must be new within this task. |
+| `RecordTestsPassed` | `TestsPassed` | Task exists and is not completed; outcome identifies the **current**, previously recorded generation. |
+| `RecordTestsFailed` | `TestsFailed` | Task exists and is not completed; outcome identifies the **current**, previously recorded generation. |
+| `CompleteTask` | `TaskCompleted` | Task exists, is assigned, and is not completed; the latest test outcome for its current generation is passed. |
 
-A later `CodeGenerated` event supersedes any prior test outcome. Therefore, a `TestsPassed(g1)` followed by `CodeGenerated(g2)` cannot authorize completion until `TestsPassed(g2)` is recorded.
+Completion is terminal: after `TaskCompleted`, reject every workflow command, including repeated completion, assignment, generation, and test-result commands. Queries remain available. Assignment requires an existing, unassigned, incomplete task; generation requires that assignment first. No reassignment or reopening command is defined.
+
+Generation identifiers are opaque and unique within a task, including superseded generations. Reusing an identifier is invalid even if the artifact reference differs. The aggregate reconstructs the set of used identifiers from history. Reject test results before any generation exists, for unknown identifiers, or for a superseded generation.
+
+A later `CodeGenerated` event makes its generation current and resets the current test outcome to absent; earlier outcomes remain immutable history. Therefore, `TestsPassed(g1)` followed by `CodeGenerated(g2)` cannot authorize completion until `TestsPassed(g2)` is recorded. Completion requires the latest outcome to be passed, not merely a pass somewhere in history.
 
 Commands that violate a domain rule return a validation/conflict result and append **no events**. The same semantic decision should be testable without PostgreSQL or HTTP.
+
+These invariant clarifications are requested by EVF-8. Any further domain policy, such as restricting repeated test results for the current generation or adding reassignment/reopening, requires explicit owner approval and an authorized ADR before adoption. This task does not introduce those policies.
 
 ### Illustrative event envelope
 
@@ -147,7 +155,11 @@ The stable `eventType` and numeric `schemaVersion` identify a logical event cont
 
 Append assigns contiguous versions starting at expectedVersion + 1. Stale commands are rejected without automatic retries: callers must reload and reassess intent. Stream concurrency does not provide durable request deduplication.
 
+Optimistic concurrency answers whether the stream has changed since the caller's expected version. Durable request idempotency would recognize the same request across retries and return its recorded result without executing it again. A retry after a lost response may encounter a version conflict or domain rejection; neither establishes the original request's outcome. Generation-ID uniqueness is a domain invariant, not request deduplication. Durable request idempotency remains deferred.
+
 The initial design relies on **optimistic concurrency and unique constraints**, not mandatory advisory locks. Advisory transaction locks are a possible later optimization if contention or ordering requires them; they are not needed to make the initial single-stream append safe.
+
+If measured hot-stream contention or an approved coordination requirement justifies advisory locks, prefer transaction-scoped locks that release at commit/rollback. All participating writers must use the same stable lock-key mapping and acquisition order, with bounded waits and deadlock handling. Acquire before the protected read/decision within that transaction; a lock acquired after deciding cannot make stale state current. Advisory locks are cooperative: retain expected-version checks, uniqueness constraints, and atomic event/projection writes. Do not silently retry domain decisions or treat locks as request idempotency. Adoption requires owner review; session-scoped locks are unsuitable as a default for pooled connections. See [PostgreSQL advisory locks](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS).
 
 ## 5. CQRS flows
 
@@ -163,14 +175,25 @@ sequenceDiagram
     C->>A: Command + expectedVersion
     A->>P: Load ordered task events
     P-->>A: Existing event stream
-    A->>D: Rehydrate state; decide command
+    A->>D: Rehydrate state and decide command
     D-->>A: New domain event(s) or rejection
-    A->>P: BEGIN TRANSACTION
-    A->>P: Append events with stream-version constraint
-    A->>R: Apply new events to task overview
-    R->>P: Upsert read model in same transaction
-    A->>P: COMMIT (or ROLLBACK on any error)
-    A-->>C: Success / domain error / HTTP 409
+    alt Command rejected
+        A-->>C: Domain error with no writes
+    else Command accepted
+        A->>P: BEGIN TRANSACTION
+        A->>P: Append events with stream-version constraint
+        opt Append succeeds
+            A->>R: Apply new events to task overview
+            R->>P: Upsert read model in same transaction
+        end
+        alt Append or projection fails
+            A->>P: ROLLBACK
+            A-->>C: Error / HTTP 409 for version conflict
+        else Writes succeed
+            A->>P: COMMIT
+            A-->>C: Success after commit
+        end
+    end
 ```
 
 Domain logic is conceptually `Decide(state, command) -> events | error` and `Apply(state, event) -> state`. Both are pure and deterministic for fixed inputs. Decide validates current intent; Apply folds historical facts without re-running command validation against current rules. Neither reads ambient state or performs I/O. Values that would otherwise be nondeterministic (clock reads, random IDs, external test results) are supplied at the command boundary and recorded in events.
@@ -212,6 +235,42 @@ An online rebuild would need shadow projections, a **commit-safe** method to cap
 
 Every stored event has `eventType` and `schemaVersion` from the start. In the MVP, explicit **upcasters** will transform old serialized contracts to a canonical in-memory representation without rewriting historical event rows. Contract fixtures and compatibility tests will verify both historical and current versions. Upcasters are pure, deterministic transformations explicitly chained by event type and schema version. Unknown versions or missing steps fail closed. Historical rows remain unchanged. Old/current fixtures must yield equivalent aggregate state and projections. Implementation has not started.
 
+#### Synthetic example: `CodeGenerated` v1 to v2
+
+This illustrative schema evolution renames `artifactRef` to `artifactReference` without changing its meaning. It is a proposed compatibility example, not an existing migration or an adopted production contract. The v1 envelope in section 3 remains a valid historical example.
+
+Stored v1 contract (identity and other envelope fields omitted here only for brevity):
+
+```json
+{
+  "eventType": "CodeGenerated",
+  "schemaVersion": 1,
+  "payload": {
+    "generationId": "g2",
+    "artifactRef": "synthetic://artifacts/task-123/g2"
+  }
+}
+```
+
+Canonical v2 representation in memory:
+
+```json
+{
+  "eventType": "CodeGenerated",
+  "schemaVersion": 2,
+  "payload": {
+    "generationId": "g2",
+    "artifactReference": "synthetic://artifacts/task-123/g2"
+  }
+}
+```
+
+The pure transformation copies `generationId` unchanged and maps `artifactReference := v1.payload.artifactRef` exactly. It changes only the in-memory schema version and field name, preserving event ID, stream identity/version, metadata, and recorded time. It performs no I/O, clock reads, random generation, artifact lookup, or mutation of its input. Identical valid inputs produce identical outputs. Stored v1 bytes remain unchanged; upcasting never appends a replacement event.
+
+Validate the declared source shape before conversion and the target shape afterward. Missing or malformed required fields fail explicitly; never generate a missing generation ID, infer an artifact, or add an unrecorded timestamp, agent, or test outcome. A future required fact unavailable in old history needs a separately approved compatibility design; an upcaster cannot invent it. In this example the supported reader accepts v1 through the explicit v1-to-v2 step and validates v2 directly. Reject every other version, unknown event type, or missing chain step with event identity and version diagnostics; stop load/replay and leave any rebuild candidate inactive.
+
+**Fixture equivalence (planned):** Pair a complete synthetic v1 history containing this event with an otherwise identical history using its v2 representation, preserving envelope identities and stream positions. Both must normalize to the same canonical events and fold to identical aggregate state (including used generation IDs and current test outcome) and all task overview business fields and final stream versions. Check against independently authored expected results at matching history boundaries, including after `g2` clears a prior `g1` pass and after a `g2` result permits completion. Fixtures must also show deterministic repeated conversion, unchanged source data, and explicit failure for malformed payloads, unsupported versions, and missing upcaster steps. These are acceptance requirements, not implemented tests.
+
 ### Snapshots
 
 Snapshots are a **planned optimization** for aggregate hydration: `(stream_id, last_applied_stream_version, serialized_state, snapshot_schema_version)`. They must never become the source of truth, and a bad or old snapshot must be bypassable by replaying events. Snapshot implementation is deferred until correctness is demonstrated without it.
@@ -230,6 +289,24 @@ Snapshots are a **planned optimization** for aggregate hydration: `(stream_id, l
 
 **MVP baseline:** optimistic concurrency and transaction rollback. **Later hardening:** durable idempotency keys, duplicate-request result caching, tested retries, and online rebuild/cutover. The API must not claim effectively-once command behavior before idempotency has been implemented and tested.
 
+### Security boundaries (planned)
+
+- **Database privileges:** Separate runtime credentials from schema-owner/migration and controlled replay/cutover credentials. The runtime role must not own tables, be superuser, have `BYPASSRLS`, create roles/databases, or inherit administrative roles. Grant only required connection/schema access, event `SELECT`/`INSERT`, and projection read/write privileges; deny event `UPDATE`, `DELETE`, `TRUNCATE`, and DDL. Review `PUBLIC` and default grants. Maintenance privileges are explicit and unavailable through normal requests; replay reads history without changing it. Privileges reduce accidental damage but do not enforce aggregate semantics against a compromised writer. See [PostgreSQL privileges](https://www.postgresql.org/docs/current/ddl-priv.html).
+- **Validation and authorization:** HTTP adapters validate shape, size, identifier formats, and allowed values; application entry points enforce the caller's permission for each command, query, and event-history inspection before access. Deny access without an explicit applicable policy. The simulator uses the same command boundary and has no privileged bypass. The aggregate independently enforces domain invariants; persistence uses parameterized SQL and validates stored event contracts. Replay/cutover is a separate operator capability, never an ordinary task command. Caller-supplied actor metadata is not proof of identity. Identity mechanism, permissions, and deployment exposure remain owner-reviewed design work before any shared/network deployment; no authentication system is claimed today.
+- **Secrets and data:** Supply credentials through protected configuration outside source control (local developer secrets or environment configuration; deployment secret storage chosen when needed). Do not embed them in command lines, examples, events, artifacts, or logs. Keep fixtures and event facts synthetic; artifact references must not contain credentials, personal data, or confidential source. Restrict access to database backups, projection diffs, and diagnostics as well as live data. Review rotation and encrypted transport/storage needs for the actual deployment; no secret-management service or production security guarantee is adopted here.
+
+### Observability and safe diagnostics (planned)
+
+Use structured logs with stable operation/result codes, safe correlation IDs, stream/event identifiers and versions where appropriate, elapsed time, and transaction outcome. Distinguish validation rejection, authorization denial, version conflict, rollback, unsupported history, replay validation, and cutover outcomes. Record committed success only after commit. Bound and sanitize untrusted diagnostic fields; exclude credentials, connection strings, raw request/event payloads, generated source, and SQL parameter values. Public errors expose a safe code and correlation ID; restricted operator diagnostics may include exception details after redaction, never raw database errors in HTTP responses.
+
+Observe command latency, conflict/rollback counts, projection failures, and replay progress/diff totals using in-process instrumentation and local structured output initially. Deterministic business diffs remain separate from operational timestamps and timings. Protect diagnostic access and define retention before deployment. A collector, dashboard service, distributed tracing backend, or broker is not an MVP prerequisite; select additional tooling only for an approved operational need.
+
+### Conditional future isolation and publication
+
+**Row-Level Security (RLS):** PostgreSQL policies can restrict visible rows and permitted writes in addition to table grants; enabled RLS with no applicable policy defaults to deny. Superusers and `BYPASSRLS` roles bypass it, and owners normally do unless forced under RLS. RLS does not protect whole-table operations such as `TRUNCATE`. It could support future tenant isolation, but cannot replace application authorization. Any tenant design must define trusted tenant identity, event/projection ownership, transaction-local context safe under connection pooling, and cross-tenant denial tests covering queries, writes, replay, and maintenance. Multi-tenancy, tenant columns, and RLS policies are **not MVP requirements**; adoption needs a separate owner-approved design. See [PostgreSQL row security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html).
+
+**Transactional Outbox:** Only if reliable external event publication becomes necessary, evaluate storing publication intent in the same transaction as events and inline projections, then relaying committed messages. Duplicate delivery remains possible, so consumer deduplication, ordering, retries, and monitoring need explicit contracts. Replay must not recreate publication intent or dispatch messages. No outbox, relay, broker, or external publication is required for the MVP; a separate owner-approved design must justify them. See the [Transactional Outbox pattern](https://microservices.io/patterns/data/transactional-outbox.html).
+
 ## 8. Architectural trade-offs
 
 | Choice | Advantage | Cost / limitation |
@@ -247,6 +324,8 @@ Event Sourcing is intentionally applied to a **workflow with meaningful history*
 ## 9. MVP quality gates and engineering guardrails
 
 The implementation will introduce unit tests for pure domain rules, PostgreSQL integration tests for transactions/concurrency, replay equivalence tests, and CI validation. MVP architecture tests enforce domain independence from HTTP, persistence, and simulation, plus allowed module dependencies. MVP engineering guardrails require build/test checks, synthetic fixtures, no secrets in events, and human review, including agent-produced changes. Tests and checks land alongside each capability without requiring real-agent integration. Automated agents will not be authorized to bypass domain commands or directly modify the event log.
+
+EVF-5 is the reference for future CI and automated quality gates (roadmap tasks 11–12), not evidence of existing enforcement. As implementation is authorized, verification must cover denied database operations, rejected unauthorized/invalid requests with no appended events, and redacted diagnostics alongside existing domain, concurrency, and replay checks. Human review remains required; no pipeline or security controls are implemented by this proposal.
 
 ## 10. Related documents
 
