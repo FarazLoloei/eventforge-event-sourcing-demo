@@ -23,8 +23,6 @@ A mutable `status` field alone does not explain how a task reached its current s
 - **Replay rebuilds state** without re-running external or AI-generated side effects.
 - **Optimistic concurrency** prevents conflicting updates to the same event stream.
 
-This is a deliberately small architectural demonstration, not a claim that Event Sourcing is appropriate for every domain.
-
 ## Example workflow
 
 A sample task might produce the following event stream:
@@ -39,15 +37,7 @@ TaskCreated
     -> TaskCompleted
 ```
 
-Each event is an immutable, versioned domain fact. The planned domain rules include:
-
-1. A task must be created before it can be assigned.
-2. Code generation requires an assigned task.
-3. A test result must refer to the task's **current generation**.
-4. A task can be completed only when the current generation has passed its tests.
-5. Repeating a failed command must not silently corrupt the event stream.
-
-The task identifiers and agent actions in demonstrations will be synthetic. A `CodeGenerated` event will reference an artifact, not embed proprietary or generated source code.
+Events are immutable, versioned facts. Assignment precedes generation; tests must refer to the current generation, and completion requires that generation to have passed. Examples and artifact references are synthetic.
 
 ## Proposed architecture
 
@@ -72,17 +62,6 @@ flowchart LR
 
 **One deployable process; one PostgreSQL database.** Events and the initial task-list projection are intended to be committed in the **same database transaction**. The diagram is conceptual; these components have not been implemented.
 
-### Logical modules
-
-| Module / boundary | Responsibility |
-| --- | --- |
-| **Workflow** (domain boundary) | Task aggregate, lifecycle rules, commands, domain events, and ownership of workflow read-model definitions. |
-| **Execution Simulation** (supporting adapter) | Produces simulated agent and test outcomes through the same public workflow commands as any other caller. No separate persistent execution domain in the MVP. |
-| **Event Storage / Projections** (infrastructure) | PostgreSQL event persistence, version checks, transactional projection updates, and replay support. |
-| **API** (delivery adapter) | REST endpoints, command validation, consistent errors, and read queries. |
-
-The boundaries are intentionally conservative. An independent Execution bounded context will be introduced only if its rules and lifecycle justify it.
-
 ### Proposed stack
 
 | Area | Technology |
@@ -95,57 +74,23 @@ The boundaries are intentionally conservative. An independent Execution bounded 
 | Tests | xUnit; unit and PostgreSQL integration tests |
 | Continuous integration | GitHub Actions |
 
-No broker, Kubernetes cluster, event-sourcing framework, or actual LLM dependency is required for the first demonstration.
-
 ## Planned capabilities
 
-### First working demonstration (MVP)
+The MVP will provide explicit lifecycle commands, simulated outcomes, status queries, optimistic stream concurrency, and transactional inline projections. It will include event schema versioning with explicit upcasters, controlled side-effect-free replay, deterministic projection diffing, and recovery validated against authoritative history.
 
-- Create, assign, and complete a task through explicit commands.
-- Record code-generation and test-outcome events from a simulated agent.
-- Persist ordered event streams in PostgreSQL with optimistic version checks.
-- Update a task overview read model transactionally with event writes.
-- Query current task status through the API.
-- Rebuild a projection deterministically from persisted events in a controlled, write-paused process.
-- Prove core invariants, concurrency rejection, and replay equivalence through automated tests.
-- Run the API and database locally and validate the build with GitHub Actions.
+Domain, PostgreSQL, concurrency, replay, and architecture tests will grow incrementally. Engineering guardrails, reproducible local setup, and GitHub Actions are MVP requirements.
 
-### Later architectural extensions
-
-- Event schema versioning with explicit, tested upcasters.
-- Aggregate snapshots as a performance optimization.
-- Request idempotency and more extensive concurrent-write validation.
-- Online projection rebuilding under active load using a commit-safe catch-up mechanism.
-- Optional event branching, isolated previews, controlled side effects, and AI-agent engineering guardrails.
-
-These features are **proposals**, not existing functionality. See [the roadmap](docs/roadmap.md) for delivery order and acceptance criteria.
+Snapshots, durable request idempotency, online projection rebuilding, event branching, isolated preview environments, and controlled side-effect execution are deferred. All capabilities remain proposed; see [the roadmap](docs/roadmap.md) for acceptance criteria.
 
 ## Engineering principles
 
-- **Events are the source of truth.** Read models are disposable and derivable.
-- **Keep domain decisions deterministic.** Time, random IDs, and external outputs become explicit command inputs or persisted facts.
-- **Atomic local consistency before distributed coordination.** A committed event must not leave its corresponding inline projection behind.
-- **Replay must be side-effect free.** Replaying a `CodeGenerated` event never regenerates code or reruns a test.
-- **Prefer simple infrastructure.** Add queues, distributed locks, or cross-service boundaries only when a measured requirement calls for them.
-- **Treat agent-produced changes as untrusted inputs.** Any future real agent integration must pass through explicit domain commands, validation, review, and tests.
+Events are authoritative; projections are disposable. Domain decisions and event application use explicit inputs and persisted facts. Event append and inline projection updates share one transaction. Replay never calls agents, regenerates artifacts, or reruns tests. Module boundaries, automated checks, and human review apply to agent-produced changes.
 
 ## Documentation
 
 - [Architecture and data-flow proposal](docs/architecture.md)
 - [Implementation roadmap and MVP acceptance criteria](docs/roadmap.md)
 - [ADR 0001: Architectural foundation](docs/adr/0001-architecture.md)
-
-## Repository state and next steps
-
-### Phase 1 review workflow
-
-Phase 1 is limited to the architecture proposal and repository documentation. The project owner performs all Git operations and Jira management manually, including repository initialization or cloning, branch creation, staging, commits, pushes, merges, and Pull Requests. Phase 2 implementation requires separate approval.
-
-The prepared repository templates are [the commit message template](.gitmessage) and [the Pull Request template](.github/PULL_REQUEST_TEMPLATE.md). Their example Jira keys are placeholders; replace them with the actual issue key before use. The presence of `.gitmessage` does not configure Git to use it.
-
-**Current milestone: Phase 1 — documentation only.** The repository is suitable for reviewing the architectural proposal, but **there is no application to run yet**.
-
-Once implementation is explicitly approved, the plan is to create the .NET solution, PostgreSQL Docker configuration, event store, workflow aggregate, API, projections, replay tooling, tests, and CI in small, verifiable increments. The intended delivery order is documented in [docs/roadmap.md](docs/roadmap.md).
 
 ## Independence and intellectual property
 
