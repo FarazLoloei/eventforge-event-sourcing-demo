@@ -33,6 +33,8 @@ The original 12 technical tasks are preserved below. Task numbers retain the ori
 
 **Clarification:** Basic optimistic stream concurrency is a correctness requirement from task **3**, not something deferred to task **10**. Task 10 deepens that guarantee and adds **request-level idempotency**, which the MVP will not claim to offer.
 
+Security and observability fit within these existing tasks: task **2** separates runtime and maintenance privileges and protects configuration; tasks **3–6** preserve append-only access, input validation, authorization boundaries, and safe structured diagnostics; task **7** restricts replay/cutover to operator capabilities. Tasks **11–12**, with **EVF-5** as the reference for future CI and automated quality gates, verify these controls incrementally. No enforcement exists yet. See the [architecture security and operational guidance](architecture.md#security-boundaries-planned); identity, deployment exposure, and operational tooling need owner review before shared/network deployment.
+
 ## 3. Incremental milestone plan
 
 ### Milestone 0 — Architecture proposal (Phase 1)
@@ -99,6 +101,8 @@ The **first working demonstration** is accepted only when all of the following c
 - Snapshots and durable request idempotency.
 - Active-load / zero-downtime projection rebuilding and controlled side-effect execution.
 - Request-level exactly-once processing or guaranteed safe retries without an idempotency implementation.
+- Multi-tenancy and RLS tenant policies; external publication and a Transactional Outbox unless a separately approved requirement justifies them.
+- Mandatory advisory locking or a dedicated observability platform; consider these only for demonstrated coordination or operational needs after owner review.
 - Fully generic domain/event frameworks, cross-aggregate process orchestration, or high-scale performance benchmarks.
 
 ## 6. Engineering workflow and documentation discipline
@@ -106,6 +110,8 @@ The **first working demonstration** is accepted only when all of the following c
 Each implementation change should state: **objective**, **architectural impact**, **observable behavior**, **tests**, **known limitations**, and **documentation updates**. The project owner approves significant design changes. New infrastructure must solve a demonstrated requirement; architectural choices should be documented by focused ADRs rather than hidden in commits.
 
 The README will be updated from *Planning* to *Implemented / Tested* **feature by feature**, only after verification. The initial repository can be shared as an architecture proposal before any implementation begins.
+
+EVF-5 covers future CI and automated quality gates within tasks 11–12; it does not imply configured required checks or automatic Jira integration. Keep security checks proportionate: verify least-privilege grants, authorization denial without writes, and diagnostic redaction as the corresponding capabilities land. Deferred capabilities remain deferred; this documentation does not authorize Phase 2.
 
 ## 7. Links
 

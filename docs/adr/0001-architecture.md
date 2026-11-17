@@ -51,6 +51,8 @@ Commands provide an expected stream version. A unique database constraint on `(s
 
 Introduce dependency tests and build/test gates incrementally with implementation. Require synthetic fixtures, secret hygiene, explicit module contracts, and human review for all contributions. Controlled replay must bypass side-effect dispatch and report stable row/field differences. Event branching, isolated preview environments, and controlled external side effects remain deferred.
 
+EVF-5 is the reference for future CI and automated quality gates under roadmap tasks 11–12; no enforcement is claimed. The [architecture security guidance](../architecture.md#security-boundaries-planned) clarifies planned least-privilege runtime/maintenance access, validation and authorization boundaries, protected configuration, and safe structured diagnostics. These controls preserve domain isolation and transactional consistency without selecting an identity provider or observability platform.
+
 ## Consequences
 
 **Positive**
@@ -87,6 +89,8 @@ Introduce dependency tests and build/test gates incrementally with implementatio
 3. **Side effects:** Real code-generation and test execution would require isolated execution, explicit authorization, and controlled side-effect boundaries; these are outside the MVP.
 4. **Request retries:** Implement and test durable command idempotency before claiming safe repeat submissions after unknown outcomes.
 5. **Module growth:** Split domain ownership only when separate invariants and release/operational needs justify it.
+6. **Security and exposure:** Review identity, permissions, deployment exposure, secret handling, diagnostic retention, and database grants before shared/network deployment. Runtime credentials must not grant migration/cutover authority. Controls remain planned until implemented and verified.
+7. **Conditional infrastructure:** Advisory transaction locks require a demonstrated coordination need and owner review; retain optimistic concurrency and atomic projections. Multi-tenancy/RLS and reliable external publication/Transactional Outbox require separate owner-approved designs and are not MVP requirements. Replay must remain free of external publication effects; no monitoring service or broker is adopted.
 
 ## Independence and source hygiene
 
@@ -96,6 +100,7 @@ All design examples, event contracts, and future code will be **original and syn
 
 - **2026-11-16:** Initial proposed decision; retained as the original decision date. The original scope deferred upcasting and treated controlled rebuild equivalence as the initial recovery check.
 - **2026-11-17 - EVF-3 revision:** Promote explicit upcasting, controlled replay/diffing, projection recovery, architecture tests, and engineering guardrails to MVP. Separate healthy verification from damaged-projection recovery. Retain offline rebuilding and defer snapshots, durable request idempotency, online rebuilding, branching, isolated previews, and controlled side effects. Clarify the engineering suitability of C#/.NET. The decision remains proposed; implementation has not started.
+- **2026-11-17 - EVF-9 clarification:** Document planned security boundaries, safe diagnostics, and proportionate observability; reference EVF-5 for future quality gates. Clarify conditional advisory locking, RLS, and external publication/outbox considerations without adopting those capabilities or changing the established architecture. Prior decision history and proposed/unimplemented status remain intact.
 
 ## References within the repository
 
