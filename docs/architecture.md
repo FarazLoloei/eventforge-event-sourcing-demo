@@ -76,6 +76,14 @@ tests/
 
 This is a possible implementation layout, not a requirement to create four assemblies immediately. Assembly boundaries should be introduced only where they preserve meaningful dependency direction.
 
+### C# and .NET implementation guidance (proposed)
+
+Use strongly typed commands, events, and domain results, with records and immutable state where appropriate. Prefer explicit results for expected business rejections and version conflicts; reserve exceptions for unexpected failures and handle them at adapter boundaries. Map domain results to HTTP responses outside the domain.
+
+Use constructor injection and small application-owned interfaces for persistence and simulated outcomes. Keep concrete implementations where an interface adds no useful boundary; avoid generic repository layers, service locators, and mandatory mediator or event-framework dependencies. Keep the domain independent of ASP.NET Core and database libraries. Use asynchronous I/O with propagated `CancellationToken` values at application and adapter boundaries; keep reducers synchronous and pure, and dispose database resources deterministically.
+
+Direct parameterized SQL with Npgsql is a potential persistence approach, not an adopted library decision. It could make expected-version enforcement and transaction ownership explicit: event inserts and inline projection writes must use the same connection and transaction, with rollback on failure and success reported after commit. SQL identifiers require trusted mappings rather than value parameters. Dependency provenance and licensing require review before adoption. See [Npgsql basic usage](https://www.npgsql.org/doc/basic-usage.html) for parameter and transaction mechanics.
+
 ## 3. Domain model and event contract
 
 ### Task aggregate
@@ -99,7 +107,7 @@ A later `CodeGenerated` event makes its generation current and resets the curren
 
 Commands that violate a domain rule return a validation/conflict result and append **no events**. The same semantic decision should be testable without PostgreSQL or HTTP.
 
-These invariant clarifications are requested by EVF-8. Any further domain policy, such as restricting repeated test results for the current generation or adding reassignment/reopening, requires explicit owner approval and an authorized ADR before adoption. This task does not introduce those policies.
+Repeated test results for the current generation are permitted; the latest outcome determines completion eligibility. Restricting repeated results or adding reassignment/reopening would change domain policy and requires explicit project-owner approval and an authorized ADR before adoption.
 
 ### Illustrative event envelope
 
@@ -325,7 +333,7 @@ Event Sourcing is intentionally applied to a **workflow with meaningful history*
 
 The implementation will introduce unit tests for pure domain rules, PostgreSQL integration tests for transactions/concurrency, replay equivalence tests, and CI validation. MVP architecture tests enforce domain independence from HTTP, persistence, and simulation, plus allowed module dependencies. MVP engineering guardrails require build/test checks, synthetic fixtures, no secrets in events, and human review, including agent-produced changes. Tests and checks land alongside each capability without requiring real-agent integration. Automated agents will not be authorized to bypass domain commands or directly modify the event log.
 
-EVF-5 is the reference for future CI and automated quality gates (roadmap tasks 11–12), not evidence of existing enforcement. As implementation is authorized, verification must cover denied database operations, rejected unauthorized/invalid requests with no appended events, and redacted diagnostics alongside existing domain, concurrency, and replay checks. Human review remains required; no pipeline or security controls are implemented by this proposal.
+Planned CI quality gates cover build, domain, PostgreSQL, upcaster, replay, and architecture checks. Verification must also cover denied database operations, rejected unauthorized/invalid requests with no appended events, and redacted diagnostics alongside existing domain, concurrency, and replay checks. Human review remains required; no pipeline or security controls are implemented by this proposal.
 
 ## 10. Related documents
 

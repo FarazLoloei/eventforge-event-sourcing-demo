@@ -51,7 +51,7 @@ Commands provide an expected stream version. A unique database constraint on `(s
 
 Introduce dependency tests and build/test gates incrementally with implementation. Require synthetic fixtures, secret hygiene, explicit module contracts, and human review for all contributions. Controlled replay must bypass side-effect dispatch and report stable row/field differences. Event branching, isolated preview environments, and controlled external side effects remain deferred.
 
-EVF-5 is the reference for future CI and automated quality gates under roadmap tasks 11–12; no enforcement is claimed. The [architecture security guidance](../architecture.md#security-boundaries-planned) clarifies planned least-privilege runtime/maintenance access, validation and authorization boundaries, protected configuration, and safe structured diagnostics. These controls preserve domain isolation and transactional consistency without selecting an identity provider or observability platform.
+Planned CI quality gates under roadmap tasks 11–12 will verify the design incrementally; no enforcement is claimed. The [architecture security guidance](../architecture.md#security-boundaries-planned) clarifies planned least-privilege runtime/maintenance access, validation and authorization boundaries, protected configuration, and safe structured diagnostics. These controls preserve domain isolation and transactional consistency without selecting an identity provider or observability platform.
 
 ## Consequences
 
