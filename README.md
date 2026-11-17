@@ -44,11 +44,11 @@ Events are immutable, versioned facts. Assignment precedes generation; tests mus
 ```mermaid
 flowchart LR
     Client[API client] --> API[ASP.NET Core API]
-    Simulator[Simulated agent adapter] --> Commands[Workflow commands]
+    Simulator[Simulated agent adapter] --> Commands[Workflow command handlers]
     API --> Commands
-    Commands --> Domain[Task aggregate / domain rules]
-    Domain --> Store[Event Store adapter]
-    Commands --> Projector[Inline projectors]
+    Commands -->|Rehydrate and decide| Domain[Task aggregate / pure domain rules]
+    Commands -->|Load and append events| Store[Event Store adapter]
+    Commands -->|Apply new events| Projector[Inline projectors]
     subgraph PostgreSQL[One PostgreSQL database]
         Events[(Event streams)]
         ReadModels[(Task overview)]
@@ -60,7 +60,9 @@ flowchart LR
     Queries --> ReadModels
 ```
 
-**One deployable process; one PostgreSQL database.** Events and the initial task-list projection are intended to be committed in the **same database transaction**. The diagram is conceptual; these components have not been implemented.
+**One deployable process; one PostgreSQL database.** Command handlers orchestrate the aggregate, event store, and inline projectors. Event append and task overview updates commit in the **same database transaction**; any failure rolls back both, and success is returned only after commit.
+
+Arrows show conceptual execution flow, not source-code dependencies. Handlers use application contracts for persistence; infrastructure implements those contracts. The aggregate remains pure and independent of HTTP, SQL, and simulation. All components remain proposed and unimplemented.
 
 ### Proposed stack
 
