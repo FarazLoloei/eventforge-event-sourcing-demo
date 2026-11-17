@@ -91,6 +91,7 @@ Events are authoritative; projections are disposable. Domain decisions and event
 - [Architecture and data-flow proposal](docs/architecture.md)
 - [Implementation roadmap and MVP acceptance criteria](docs/roadmap.md)
 - [ADR 0001: Architectural foundation](docs/adr/0001-architecture.md)
+- [AI agent governance and engineering rules](AGENTS.md) (documented policy; automated enforcement is not implemented).
 
 ## Independence and intellectual property
 
