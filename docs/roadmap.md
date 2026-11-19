@@ -1,7 +1,7 @@
 # EventForge — Implementation Roadmap
 
 > **Status: Planning / Work in Progress**  
-> The repository began with **documentation only**; implementation now proceeds task by task, and the README records what is implemented and verified. None of the 12 tasks below is marked complete, and no end-to-end MVP demonstration is claimed.
+> The repository began with **documentation only**; implementation now proceeds task by task, and the README records what is implemented and verified. Task 1 is completed, tasks 11 and 12 are partially implemented, and the remaining tasks are planned or deferred. The MVP is not complete, and no end-to-end MVP demonstration is claimed.
 
 ## 1. Delivery approach
 
@@ -16,20 +16,22 @@ The original 12 technical tasks are preserved below. Task numbers retain the ori
 
 ## 2. The 12 planned development tasks
 
-| # | Task | Scope | Expected deliverable / verification |
-| --- | --- | --- | --- |
-| **1** | **Solution and architecture setup** | MVP | Minimal .NET 10 solution; clear module dependency direction; documented commands; basic domain test scaffold. |
-| **2** | **PostgreSQL and Docker configuration** | MVP | Local PostgreSQL through Docker Compose, repeatable migration/setup, configuration without committed secrets. |
-| **3** | **Event Store implementation** | MVP | Append/load one aggregate stream; immutable events, event envelope, unique `(stream_type, stream_id, stream_version)` constraint, baseline expected-version checks. |
-| **4** | **Domain aggregates and event persistence** | MVP | Pure Task `Decide`/`Apply` behavior; valid transitions emit events; invalid transitions do not persist. |
-| **5** | **CQRS commands and queries** | MVP | REST commands for create/assign/generate/test/complete and query endpoints for task status/event history; explicit error contracts. |
-| **6** | **Transactional projections** | MVP | A task overview read model updated within the same transaction as event writes; demonstrated rollback on failure. |
-| **7** | **Event replay and projection rebuilding** | MVP | Write-paused rebuild into a shadow projection; deterministic diffing, healthy verification, damaged-projection recovery, and safe cutover/failure tests. |
-| **8** | **Event schema versioning and upcasting** | MVP | At least one evolved event schema; explicit upcaster; historical fixtures and compatibility tests. |
-| **9** | **Snapshots** | Advanced | Optional aggregate snapshots; version-aware loading; replay-from-origin fallback; tests proving no behavior change. |
-| **10** | **Concurrency and idempotency** | Advanced hardening | Concurrent-writer tests beyond baseline version checks; durable request idempotency; safe repeated submissions and documented retry policy. |
-| **11** | **Automated unit and integration tests** | MVP + Advanced | Incremental xUnit domain, PostgreSQL transaction/concurrency, upcaster, replay/diff/recovery, and architecture tests; expand for deferred capabilities. |
-| **12** | **GitHub Actions CI and final documentation** | MVP + Advanced | MVP engineering guardrails: CI builds and tests against PostgreSQL, module dependency checks, synthetic fixtures, secret hygiene, and review requirements; accurate local-run instructions and example commands; subsequent docs updated as features land. |
+| # | Task | Scope | Status | Expected deliverable / verification |
+| --- | --- | --- | --- | --- |
+| **1** | **Solution and architecture setup** | MVP | **Completed** (EVF-13) | Minimal .NET 10 solution; clear module dependency direction; documented commands; basic domain test scaffold. |
+| **2** | **PostgreSQL and Docker configuration** | MVP | Planned | Local PostgreSQL through Docker Compose, repeatable migration/setup, configuration without committed secrets. |
+| **3** | **Event Store implementation** | MVP | Planned | Append/load one aggregate stream; immutable events, event envelope, unique `(stream_type, stream_id, stream_version)` constraint, baseline expected-version checks. |
+| **4** | **Domain aggregates and event persistence** | MVP | Planned | Pure Task `Decide`/`Apply` behavior; valid transitions emit events; invalid transitions do not persist. |
+| **5** | **CQRS commands and queries** | MVP | Planned | REST commands for create/assign/generate/test/complete and query endpoints for task status/event history; explicit error contracts. |
+| **6** | **Transactional projections** | MVP | Planned | A task overview read model updated within the same transaction as event writes; demonstrated rollback on failure. |
+| **7** | **Event replay and projection rebuilding** | MVP | Planned | Write-paused rebuild into a shadow projection; deterministic diffing, healthy verification, damaged-projection recovery, and safe cutover/failure tests. |
+| **8** | **Event schema versioning and upcasting** | MVP | Planned | At least one evolved event schema; explicit upcaster; historical fixtures and compatibility tests. |
+| **9** | **Snapshots** | Advanced | Deferred | Optional aggregate snapshots; version-aware loading; replay-from-origin fallback; tests proving no behavior change. |
+| **10** | **Concurrency and idempotency** | Advanced hardening | Deferred | Concurrent-writer tests beyond baseline version checks; durable request idempotency; safe repeated submissions and documented retry policy. |
+| **11** | **Automated unit and integration tests** | MVP + Advanced | **Partially implemented** (architecture test baseline) | Incremental xUnit domain, PostgreSQL transaction/concurrency, upcaster, replay/diff/recovery, and architecture tests; expand for deferred capabilities. |
+| **12** | **GitHub Actions CI and final documentation** | MVP + Advanced | **Partially implemented** (operational baseline CI; EVF-5 in progress) | MVP engineering guardrails: CI builds and tests against PostgreSQL, module dependency checks, synthetic fixtures, secret hygiene, and review requirements; accurate local-run instructions and example commands; subsequent docs updated as features land. |
+
+**Status detail.** Task 1 is delivered by EVF-13 (solution, SDK pin, module scaffolding, documented commands, test project). Task 11 so far covers xUnit architecture dependency tests only (EVF-16); domain, PostgreSQL, upcaster and replay tests are not implemented. Task 12 so far covers a baseline GitHub Actions workflow (restore, Release build, xUnit tests, TRX artifacts) that ran successfully on a pull request and on `main` on November 19, 2026 (33 tests passed, 0 warnings, 0 errors). Controlled CI failure verification, PostgreSQL and further quality gates, and CD remain pending, so EVF-5 and task 12 are not complete. Required status checks and branch protection are not configured; they require separate project-owner approval and are not EVF-5 closure requirements.
 
 **Clarification:** Basic optimistic stream concurrency is a correctness requirement from task **3**, not something deferred to task **10**. Task 10 deepens that guarantee and adds **request-level idempotency**, which the MVP will not claim to offer.
 
@@ -111,7 +113,7 @@ Technical changes require a clear rationale, observable behavior, validation evi
 
 The README will be updated from *Planning* to *Implemented / Tested* **feature by feature**, only after verification. The initial repository can be shared as an architecture proposal before any implementation begins.
 
-Planned CI quality gates will verify least-privilege grants, authorization denial without writes, and diagnostic redaction alongside domain, persistence, and replay behavior. Required checks are not configured. Deferred capabilities remain outside the MVP, and implementation still requires explicit project-owner authorization.
+Planned CI quality gates will verify least-privilege grants, authorization denial without writes, and diagnostic redaction alongside domain, persistence, and replay behavior. The baseline CI workflow is operational, but required status checks and branch protection are not configured. Deferred capabilities remain outside the MVP, and implementation still requires explicit project-owner authorization.
 
 ## 7. Links
 
