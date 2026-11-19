@@ -5,7 +5,7 @@
 **An architectural proposal for deterministic, auditable AI-assisted software workflows.**
 
 > **Project status: Planning / Work in Progress**  
-> **Implementation status: Early scaffolding (EVF-14, EVF-15, EVF-16).** The repository contains architecture and delivery documentation, a .NET 10 solution with one ASP.NET Core host (process-liveness health endpoint), empty module and adapter projects, and an xUnit project with static architecture dependency tests. No workflow behavior, database schema, domain or PostgreSQL tests, or CI pipeline is claimed to exist yet. See [Local setup](#local-setup) and [Architecture tests](#architecture-tests).
+> **Implementation status: Early scaffolding (EVF-14, EVF-15, EVF-16, EVF-17).** The repository contains architecture and delivery documentation, a .NET 10 solution with one ASP.NET Core host (process-liveness health endpoint; built-in DI with build and scope validation, no module services registered), empty module and adapter projects, and an xUnit project with static architecture dependency tests. No workflow behavior, database schema, domain or PostgreSQL tests, or CI pipeline is claimed to exist yet. See [Local setup](#local-setup) and [Architecture tests](#architecture-tests).
 
 EventForge is an independent portfolio project exploring how **Event Sourcing, CQRS, Domain-Driven Design (DDD), and a Modular Monolith** can provide a reliable foundation for an AI-assisted software development workflow.
 
@@ -105,7 +105,25 @@ curl.exe -i http://127.0.0.1:5080/health
 
 Expected result: `HTTP/1.1 200 OK` with the body `Healthy`. The endpoint reports basic process liveness only; it does not check a database or any external service.
 
-Verified locally with SDK 10.0.404 (`restore --force`, then `build --no-incremental`): 0 warnings and 0 errors; `dotnet test` passed 33 of 33 tests (0 failed, 0 skipped); and `GET /health` returned `200 OK` with `Healthy`. The health check was manual. CI is not implemented; it is tracked by EVF-5.
+Verified locally with SDK 10.0.404 (EVF-17), run from the repository root:
+
+```powershell
+dotnet restore EventForge.slnx --force
+dotnet build EventForge.slnx --no-restore --no-incremental
+dotnet test EventForge.slnx --no-build --no-restore
+dotnet build EventForge.slnx -c Release --no-restore --no-incremental
+dotnet test EventForge.slnx -c Release --no-build --no-restore
+```
+
+- Debug and Release builds: 0 warnings, 0 errors.
+- Debug tests: 33 passed, 0 failed, 0 skipped. Release tests: 33 passed, 0 failed, 0 skipped.
+- Host started separately with `ASPNETCORE_ENVIRONMENT` and `DOTNET_ENVIRONMENT` both set: Development (Debug build) and Production (Release build) each logged the matching hosting environment, and `GET /health` returned `200 OK` with body `Healthy`. The health checks were manual. CI is not implemented; it is tracked by EVF-5.
+
+### Dependency injection
+
+`src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container. `ValidateOnBuild` and `ValidateScopes` are enabled explicitly in all environments. The only registered service is the health-check infrastructure (`AddHealthChecks()`); Workflow, Infrastructure and Simulation registrations are deferred until real services exist, and nothing for them is registered or validated today.
+
+Policy for future services: concrete services are registered explicitly in the API; Application owns its ports and adapters implement them; services use constructor injection; the domain is independent of the container; singletons must be safe for concurrent use; scoped services use a request or unit-of-work lifetime; circular and captive scoped dependencies are forbidden. Lifetimes are chosen from actual implementations. These options give baseline validation only: they do not guarantee every runtime dependency path, factory implementation or open generic registration is valid. See [the architecture document](docs/architecture.md#composition-root-and-dependency-injection-evf-17).
 
 ### Implementation status
 
@@ -119,7 +137,9 @@ Verified locally with SDK 10.0.404 (`restore --force`, then `build --no-incremen
 | Domain behavior tests, PostgreSQL integration tests | Not implemented |
 | PostgreSQL, Docker Compose, event store, projections, replay, upcasting | Not implemented |
 | REST workflow endpoints, authentication and authorization | Not implemented |
-| GitHub Actions CI (EVF-5), dependency injection composition (EVF-17) | Not implemented |
+| Composition root with built-in DI, `ValidateOnBuild`/`ValidateScopes` (EVF-17) | Implemented; only health checks registered |
+| Module and adapter service registration | Not implemented (deferred until concrete services exist) |
+| GitHub Actions CI (EVF-5) | Not implemented |
 
 ### Solution structure
 

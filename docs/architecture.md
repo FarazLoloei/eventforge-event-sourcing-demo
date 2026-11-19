@@ -1,7 +1,7 @@
 # EventForge — Architecture Proposal
 
 > **Status: Proposed / Not implemented**  
-> This document specifies an intended architecture. It does not describe a running system; so far only a minimal ASP.NET Core host with a `/health` liveness endpoint (EVF-14) and empty module/adapter project scaffolding (EVF-15) exist, together with static architecture dependency tests (EVF-16). Decisions are deliberately scoped to a small, auditable proof of concept.
+> This document specifies an intended architecture. It does not describe a running system; so far only a minimal ASP.NET Core host with a `/health` liveness endpoint (EVF-14) and empty module/adapter project scaffolding (EVF-15) exist, together with static architecture dependency tests (EVF-16) and a validated built-in DI composition root with no module services registered (EVF-17). Decisions are deliberately scoped to a small, auditable proof of concept.
 
 ## 1. Goals, scope, and constraints
 
@@ -98,6 +98,20 @@ Use strongly typed commands, events, and domain results, with records and immuta
 Use constructor injection and small application-owned interfaces for persistence and simulated outcomes. Keep concrete implementations where an interface adds no useful boundary; avoid generic repository layers, service locators, and mandatory mediator or event-framework dependencies. Keep the domain independent of ASP.NET Core and database libraries. Use asynchronous I/O with propagated `CancellationToken` values at application and adapter boundaries; keep reducers synchronous and pure, and dispose database resources deterministically.
 
 Direct parameterized SQL with Npgsql is a potential persistence approach, not an adopted library decision. It could make expected-version enforcement and transaction ownership explicit: event inserts and inline projection writes must use the same connection and transaction, with rollback on failure and success reported after commit. SQL identifiers require trusted mappings rather than value parameters. Dependency provenance and licensing require review before adoption. See [Npgsql basic usage](https://www.npgsql.org/doc/basic-usage.html) for parameter and transaction mechanics.
+
+### Composition root and dependency injection (EVF-17)
+
+**Implemented:** `src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container (no additional container, scanning or service locator). It sets `ValidateOnBuild = true` and `ValidateScopes = true` through `UseDefaultServiceProvider` in every environment, registers only `AddHealthChecks()`, and maps `/health`. No application, domain or adapter service is registered, because none exists yet.
+
+**Deferred:** Workflow, Infrastructure and Simulation registrations are not implemented. Each will be added explicitly in the API composition root when a concrete service exists, not before. No future service should be assumed to be registered or validated.
+
+**Policy (applies once services exist):**
+
+- `EventForge.Api` owns the composition root. Application owns its ports and contracts; adapters implement application-owned ports. The domain stays independent of the DI container.
+- Services use constructor injection. Circular dependencies and captive scoped dependencies are forbidden.
+- Singletons must be safe for shared concurrent use. Scoped services use a request or unit-of-work lifetime. Transient is used where appropriate. Each lifetime is chosen from an actual implementation, not speculatively.
+
+**Limits of validation:** `ValidateOnBuild` and `ValidateScopes` are a baseline check on the registered graph. They do not guarantee validation of every runtime dependency path, factory delegate implementation or open generic registration. The `/health` endpoint reports process liveness only; it does not prove database readiness, workflow behavior or future service resolution.
 
 ## 3. Domain model and event contract
 
