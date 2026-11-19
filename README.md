@@ -33,7 +33,7 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | Clean Architecture project scaffolding (`Workflow`, `Infrastructure`, `Simulation`) with the project references below | Implemented (empty; no production types) |
 | Native DI with `ValidateOnBuild` and `ValidateScopes` (EVF-17) | Implemented; only health checks are explicitly registered |
 | xUnit project with Roslyn-based architecture dependency tests (EVF-16) | Implemented; limited to the checks in [Automated architecture validation](#automated-architecture-validation) |
-| GitHub Actions baseline CI with TRX test-result artifacts (EVF-5) | Implemented and operational; see the limits under [Continuous integration](#continuous-integration) |
+| GitHub Actions baseline CI with TRX test-result artifacts (EVF-5) | Implemented and verified, including controlled failure and recovery; see [Continuous integration](#continuous-integration) |
 | Engineering governance documents ([AGENTS.md](AGENTS.md), PR and commit templates) | Documented; enforcement is partial (see [governance](#ai-assisted-engineering-and-governance)) |
 
 ### Planned, not implemented
@@ -50,7 +50,7 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | Deterministic replay and projection recovery | Planned |
 | Domain tests and PostgreSQL integration tests | Planned |
 | Authentication and authorization | Planned (identity mechanism needs owner review) |
-| Required status checks, branch protection, controlled CI failure verification | Pending |
+| Required status checks and branch protection | Not configured; outside EVF-5 scope (separate project-owner approval) |
 | PostgreSQL, event-contract, concurrency and replay CI quality gates | Not implemented |
 | CD and deployment | Not implemented |
 
@@ -282,12 +282,22 @@ Both the pull request run and the `main` push run completed successfully:
 - [Main CI run](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/actions/runs/44484880631)
 - [Merged pull request #11](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/11)
 
-### Remaining CI limitations
+### Controlled failure and recovery verification (November 19, 2026)
 
-EVF-5 is **in progress** and is not marked complete. Still pending or not implemented:
+Failure handling was verified on a temporary review pull request ([#13](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/13)), independently checked from the GitHub Actions logs:
 
-- Controlled CI failure verification.
-- Required status checks and branch protection. None are configured; they require separate project-owner approval and are not EVF-5 closure requirements.
+| Run | Result |
+| --- | --- |
+| [Controlled failure](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/actions/runs/44532239727) | Release build: 0 warnings, 0 errors. Tests: 33 passed, 1 intentionally failed, 0 skipped. Test process exit code 1. The CI job reported failure. The TRX artifact was still uploaded. |
+| [Successful recovery](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/actions/runs/44532814416) | Release build: 0 warnings, 0 errors. Tests: 33 passed, 0 failed, 0 skipped. The CI job succeeded and the TRX artifact was uploaded. |
+
+The temporary failing test was removed before the end of the review. PR #13 was closed without merging, its final diff had zero changed files, and `main` was unchanged. The temporary failing test was never merged into main.
+
+### Status and remaining limitations
+
+The EVF-5 baseline CI implementation and verification are **complete**: the workflow is operational, and successful, failing and recovery runs were verified. Not part of the baseline, and not implemented:
+
+- Required status checks and branch protection. None are configured; they require separate project-owner approval and are outside EVF-5 scope.
 - PostgreSQL integration tests, event-contract and upcaster compatibility checks, optimistic-concurrency tests and replay/projection-diff verification; these quality gates will be added with the capabilities they verify.
 - CD and deployment.
 
@@ -339,7 +349,7 @@ The 12 roadmap tasks, milestones and MVP acceptance criteria are preserved in [d
 | 9 | Snapshots | Deferred (advanced) |
 | 10 | Concurrency and idempotency | Deferred (advanced hardening) |
 | 11 | Automated unit and integration tests | Partially implemented (architecture test baseline) |
-| 12 | GitHub Actions CI and final documentation | Partially implemented (operational baseline CI; EVF-5 in progress) |
+| 12 | GitHub Actions CI and final documentation | Partially implemented (baseline CI complete and verified, EVF-5; further quality gates pending) |
 
 Full MVP acceptance remains pending.
 
