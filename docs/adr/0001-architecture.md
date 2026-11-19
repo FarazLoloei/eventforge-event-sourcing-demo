@@ -1,6 +1,6 @@
 # ADR 0001 — Modular Monolith with Event Sourcing and CQRS
 
-- **Status:** Proposed (not yet implemented)
+- **Status:** Proposed (implementation in progress; see the README for verified status)
 - **Date:** 2026-11-16
 - **Decision owner:** Project owner
 - **Scope:** EventForge initial architecture and MVP

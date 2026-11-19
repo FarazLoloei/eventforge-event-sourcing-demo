@@ -1,7 +1,7 @@
 # EventForge — Implementation Roadmap
 
 > **Status: Planning / Work in Progress**  
-> The repository begins with **documentation only**. None of the implementation tasks below is complete, and no runnable demonstration is claimed.
+> The repository began with **documentation only**; implementation now proceeds task by task, and the README records what is implemented and verified. None of the 12 tasks below is marked complete, and no end-to-end MVP demonstration is claimed.
 
 ## 1. Delivery approach
 
@@ -41,7 +41,7 @@ Security and observability fit within these existing tasks: task **2** separates
 
 **Deliverables:** The four public architecture documents: README, architecture proposal, roadmap, and ADR 0001.
 
-**Exit conditions:** All four documents agree on scope and priorities, distinguish proposals from implementation, and contain no confidential data. Implementation has not started.
+**Exit conditions:** All four documents agree on scope and priorities, distinguish proposals from implementation, and contain no confidential data. Implementation status is tracked in the README.
 
 ### Milestone 1 — Persist one workflow (Tasks 1–5)
 

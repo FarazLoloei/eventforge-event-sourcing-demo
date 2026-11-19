@@ -1,7 +1,7 @@
 # EventForge — Architecture Proposal
 
 > **Status: Proposed / Not implemented**  
-> This document specifies an intended architecture. It does not describe a running system. Decisions are deliberately scoped to a small, auditable proof of concept.
+> This document specifies an intended architecture. It does not describe a running system; so far only a minimal ASP.NET Core host with a `/health` liveness endpoint (EVF-14) and empty module/adapter project scaffolding (EVF-15) exist, together with static architecture dependency tests (EVF-16) and a validated built-in DI composition root with no module services registered (EVF-17). Decisions are deliberately scoped to a small, auditable proof of concept.
 
 ## 1. Goals, scope, and constraints
 
@@ -60,21 +60,36 @@ Arrows show conceptual execution flow, not source-code dependencies. The bounded
 
 `Task Workflow` is the bounded context; `Execution Simulation` is intentionally an adapter, **not** an artificially independent bounded context. Read models remain owned by the Workflow domain while their storage implementation stays in infrastructure. Modules will communicate through explicit application contracts rather than through one another's tables or implementation types.
 
-### Future code organization (not yet created)
+### Code organization (src scaffolding and architecture tests exist)
 
 ```text
 src/
-  EventForge.Api/              # HTTP composition root and REST endpoints
-  EventForge.Workflow/         # Commands, domain events, aggregate, projection contracts
-  EventForge.Infrastructure/   # PostgreSQL event store and transaction adapters
-  EventForge.Simulation/       # Simulated agent outcome provider
+  EventForge.Api/              # HTTP composition root and REST endpoints (implemented: /health only)
+  EventForge.Workflow/         # Task Workflow bounded context (scaffolding only)
+    Domain/                    #   EventForge.Workflow.Domain: aggregate, events, pure decide/apply
+    Application/               #   EventForge.Workflow.Application: handlers, ports, read-model contracts
+  EventForge.Infrastructure/   # Future PostgreSQL event store and transaction adapters (scaffolding only)
+  EventForge.Simulation/       # Future simulated agent/test-outcome adapters (scaffolding only)
 
 tests/
-  EventForge.UnitTests/
-  EventForge.IntegrationTests/
+  EventForge.UnitTests/        # Implemented: xUnit architecture dependency tests only
+  EventForge.IntegrationTests/ # Planned, not created
 ```
 
-This is a possible implementation layout, not a requirement to create four assemblies immediately. Assembly boundaries should be introduced only where they preserve meaningful dependency direction.
+Domain and Application share one assembly (`EventForge.Workflow`) for this baseline and are separated by folder and namespace. Further assemblies should be introduced only where they preserve meaningful dependency direction.
+
+**Direct project references (implemented):**
+
+| Project | Direct project references |
+| --- | --- |
+| EventForge.Api | EventForge.Workflow, EventForge.Infrastructure, EventForge.Simulation |
+| EventForge.Workflow | None |
+| EventForge.Infrastructure | EventForge.Workflow |
+| EventForge.Simulation | EventForge.Workflow |
+
+Workflow references no outer project; Infrastructure and Simulation do not reference each other or the API; the API is the only executable composition root. Application code may depend on Domain code; Domain code must not depend on Application code. Infrastructure implements future persistence and transaction adapters, and Simulation implements future synthetic agent and test-outcome adapters; neither decides domain transitions.
+
+**Enforcement status:** The projects are empty scaffolding with no types, ports, or behavior. `tests/EventForge.UnitTests` (EVF-16) checks the project-reference matrix above from the actual `.csproj` files and, using Roslyn semantic analysis, the namespace rules for Domain, Application, Infrastructure and Simulation (including Domain independence from HTTP and SQL libraries). Hand-written Workflow source outside the Domain and Application folders is rejected, namespaces are validated from resolved symbols, and API files may not declare namespaces owned by other modules. Synthetic positive and negative fixtures run through the same checker. All sources are analyzed in one combined Roslyn compilation against framework assemblies only, so package types resolve as errors (reported, not ignored). Currently Domain and Application contain no C# types, so the production scan of those folders is empty and proves nothing by itself; the fixtures demonstrate that the checker works. The analysis is static: it does not evaluate MSBuild conditions or imports, check `PackageReference` items, or detect reflection or runtime behavior. The tests are run locally; CI is not implemented (EVF-5). See the README for commands and results.
 
 ### C# and .NET implementation guidance (proposed)
 
@@ -83,6 +98,20 @@ Use strongly typed commands, events, and domain results, with records and immuta
 Use constructor injection and small application-owned interfaces for persistence and simulated outcomes. Keep concrete implementations where an interface adds no useful boundary; avoid generic repository layers, service locators, and mandatory mediator or event-framework dependencies. Keep the domain independent of ASP.NET Core and database libraries. Use asynchronous I/O with propagated `CancellationToken` values at application and adapter boundaries; keep reducers synchronous and pure, and dispose database resources deterministically.
 
 Direct parameterized SQL with Npgsql is a potential persistence approach, not an adopted library decision. It could make expected-version enforcement and transaction ownership explicit: event inserts and inline projection writes must use the same connection and transaction, with rollback on failure and success reported after commit. SQL identifiers require trusted mappings rather than value parameters. Dependency provenance and licensing require review before adoption. See [Npgsql basic usage](https://www.npgsql.org/doc/basic-usage.html) for parameter and transaction mechanics.
+
+### Composition root and dependency injection (EVF-17)
+
+**Implemented:** `src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container (no additional container, scanning or service locator). It sets `ValidateOnBuild = true` and `ValidateScopes = true` through `UseDefaultServiceProvider` in every environment, registers only `AddHealthChecks()`, and maps `/health`. No application, domain or adapter service is registered, because none exists yet.
+
+**Deferred:** Workflow, Infrastructure and Simulation registrations are not implemented. Each will be added explicitly in the API composition root when a concrete service exists, not before. No future service should be assumed to be registered or validated.
+
+**Policy (applies once services exist):**
+
+- `EventForge.Api` owns the composition root. Application owns its ports and contracts; adapters implement application-owned ports. The domain stays independent of the DI container.
+- Services use constructor injection. Circular dependencies and captive scoped dependencies are forbidden.
+- Singletons must be safe for shared concurrent use. Scoped services use a request or unit-of-work lifetime. Transient is used where appropriate. Each lifetime is chosen from an actual implementation, not speculatively.
+
+**Limits of validation:** `ValidateOnBuild` and `ValidateScopes` are a baseline check on the registered graph. They do not guarantee validation of every runtime dependency path, factory delegate implementation or open generic registration. The `/health` endpoint reports process liveness only; it does not prove database readiness, workflow behavior or future service resolution.
 
 ## 3. Domain model and event contract
 
@@ -333,7 +362,7 @@ Event Sourcing is intentionally applied to a **workflow with meaningful history*
 
 The implementation will introduce unit tests for pure domain rules, PostgreSQL integration tests for transactions/concurrency, replay equivalence tests, and CI validation. MVP architecture tests enforce domain independence from HTTP, persistence, and simulation, plus allowed module dependencies. MVP engineering guardrails require build/test checks, synthetic fixtures, no secrets in events, and human review, including agent-produced changes. Tests and checks land alongside each capability without requiring real-agent integration. Automated agents will not be authorized to bypass domain commands or directly modify the event log.
 
-Planned CI quality gates cover build, domain, PostgreSQL, upcaster, replay, and architecture checks. Verification must also cover denied database operations, rejected unauthorized/invalid requests with no appended events, and redacted diagnostics alongside existing domain, concurrency, and replay checks. Human review remains required; no pipeline or security controls are implemented by this proposal.
+Initial architecture dependency tests exist and run locally (EVF-16). Planned CI quality gates cover build, domain, PostgreSQL, upcaster, replay, and architecture checks. Verification must also cover denied database operations, rejected unauthorized/invalid requests with no appended events, and redacted diagnostics alongside existing domain, concurrency, and replay checks. Human review remains required; no pipeline or security controls are implemented by this proposal.
 
 ## 10. Related documents
 

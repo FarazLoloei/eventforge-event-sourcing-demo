@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EventForge.Workflow\EventForge.Workflow.csproj" />
+    <ProjectReference Include="..\EventForge.Infrastructure\EventForge.Infrastructure.csproj" />
+    <ProjectReference Include="..\EventForge.Simulation\EventForge.Simulation.csproj" />
+  </ItemGroup>
+
+</Project>

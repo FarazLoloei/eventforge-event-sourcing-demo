@@ -2,7 +2,7 @@
 
 ## Scope and authority
 
-EventForge is documentation-only; implementation has not started. These are engineering rules for authorized work, not evidence of implemented safeguards. No application, automated tests, architecture checks, CI gates, commit linting, or Jira integration is claimed to exist. Git templates provide guidance, not enforcement.
+EventForge is an architecture proposal with implementation proceeding task by task; the README records what is implemented and verified. These are engineering rules for authorized work, not evidence of implemented safeguards. No workflow behavior, persistence, simulation, automated tests, architecture checks, CI gates, commit linting, or Jira integration is claimed to exist unless the README documents it as implemented and verified. Git templates provide guidance, not enforcement.
 
 - Read the [architecture proposal](docs/architecture.md), [roadmap](docs/roadmap.md), and [ADR 0001](docs/adr/0001-architecture.md) before making changes. Follow their current proposed baseline and preserve decision history.
 - Inspect repository context and edit/validate only files authorized by the active task. Keep changes focused, preserve unrelated work, and report scope conflicts before expanding edits.
