@@ -5,7 +5,7 @@
 **An architectural proposal for deterministic, auditable AI-assisted software workflows.**
 
 > **Project status: Planning / Work in Progress**  
-> **Implementation status: Early scaffolding (EVF-14).** The repository contains architecture and delivery documentation plus a minimal .NET 10 solution with one ASP.NET Core host that exposes a process-liveness health endpoint. No workflow behavior, database schema, automated tests, or CI pipeline is claimed to exist yet. See [Local setup](#local-setup).
+> **Implementation status: Early scaffolding (EVF-14, EVF-15).** The repository contains architecture and delivery documentation plus a .NET 10 solution with one ASP.NET Core host (process-liveness health endpoint) and empty module and adapter projects. No workflow behavior, database schema, automated tests, architecture enforcement, or CI pipeline is claimed to exist yet. See [Local setup](#local-setup).
 
 EventForge is an independent portfolio project exploring how **Event Sourcing, CQRS, Domain-Driven Design (DDD), and a Modular Monolith** can provide a reliable foundation for an AI-assisted software development workflow.
 
@@ -112,10 +112,35 @@ Verified locally with SDK 10.0.404: restore and build succeed with 0 warnings an
 | --- | --- |
 | Solution (`EventForge.slnx`) and SDK pin (`global.json`) | Implemented |
 | ASP.NET Core host (`src/EventForge.Api`) with `/health` liveness endpoint | Implemented |
-| Workflow domain/application layers, infrastructure and simulation projects | Not implemented |
+| Project scaffolding: `EventForge.Workflow` (Domain/Application folders), `EventForge.Infrastructure`, `EventForge.Simulation`, with the project references below | Implemented (empty; no types or behavior) |
+| Workflow domain and application behavior, adapter implementations | Not implemented |
+| Automated architecture enforcement of dependency rules (EVF-16) | Not implemented |
 | PostgreSQL, Docker Compose, event store, projections, replay, upcasting | Not implemented |
 | REST workflow endpoints, authentication and authorization | Not implemented |
 | xUnit and architecture tests, GitHub Actions CI | Not implemented |
+
+### Solution structure
+
+```text
+src/
+  EventForge.Api/             # Only executable; composition root; /health
+  EventForge.Workflow/        # Task Workflow bounded context (one assembly)
+    Domain/                   # EventForge.Workflow.Domain (README only)
+    Application/              # EventForge.Workflow.Application (README only)
+  EventForge.Infrastructure/  # Future persistence and transaction adapters
+  EventForge.Simulation/      # Future synthetic agent/test-outcome adapters
+```
+
+Direct project references:
+
+| Project | References |
+| --- | --- |
+| EventForge.Api | Workflow, Infrastructure, Simulation |
+| EventForge.Workflow | None |
+| EventForge.Infrastructure | Workflow |
+| EventForge.Simulation | Workflow |
+
+Task Workflow is the only bounded context; Simulation is an adapter. These rules are documented, not automatically enforced; architecture tests are planned for EVF-16.
 
 ## Engineering principles
 

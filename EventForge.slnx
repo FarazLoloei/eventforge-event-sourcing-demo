@@ -1,5 +1,8 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/EventForge.Api/EventForge.Api.csproj" />
+    <Project Path="src/EventForge.Infrastructure/EventForge.Infrastructure.csproj" />
+    <Project Path="src/EventForge.Simulation/EventForge.Simulation.csproj" />
+    <Project Path="src/EventForge.Workflow/EventForge.Workflow.csproj" />
   </Folder>
 </Solution>

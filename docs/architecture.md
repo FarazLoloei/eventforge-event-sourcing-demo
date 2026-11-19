@@ -1,7 +1,7 @@
 # EventForge — Architecture Proposal
 
 > **Status: Proposed / Not implemented**  
-> This document specifies an intended architecture. It does not describe a running system; so far only a minimal ASP.NET Core host with a `/health` liveness endpoint exists (EVF-14). Decisions are deliberately scoped to a small, auditable proof of concept.
+> This document specifies an intended architecture. It does not describe a running system; so far only a minimal ASP.NET Core host with a `/health` liveness endpoint (EVF-14) and empty module/adapter project scaffolding (EVF-15) exist. Decisions are deliberately scoped to a small, auditable proof of concept.
 
 ## 1. Goals, scope, and constraints
 
@@ -60,21 +60,36 @@ Arrows show conceptual execution flow, not source-code dependencies. The bounded
 
 `Task Workflow` is the bounded context; `Execution Simulation` is intentionally an adapter, **not** an artificially independent bounded context. Read models remain owned by the Workflow domain while their storage implementation stays in infrastructure. Modules will communicate through explicit application contracts rather than through one another's tables or implementation types.
 
-### Future code organization (only `src/EventForge.Api` exists so far)
+### Code organization (src scaffolding exists; tests are planned)
 
 ```text
 src/
-  EventForge.Api/              # HTTP composition root and REST endpoints
-  EventForge.Workflow/         # Commands, domain events, aggregate, projection contracts
-  EventForge.Infrastructure/   # PostgreSQL event store and transaction adapters
-  EventForge.Simulation/       # Simulated agent outcome provider
+  EventForge.Api/              # HTTP composition root and REST endpoints (implemented: /health only)
+  EventForge.Workflow/         # Task Workflow bounded context (scaffolding only)
+    Domain/                    #   EventForge.Workflow.Domain: aggregate, events, pure decide/apply
+    Application/               #   EventForge.Workflow.Application: handlers, ports, read-model contracts
+  EventForge.Infrastructure/   # Future PostgreSQL event store and transaction adapters (scaffolding only)
+  EventForge.Simulation/       # Future simulated agent/test-outcome adapters (scaffolding only)
 
-tests/
+tests/                         # Planned, not created
   EventForge.UnitTests/
   EventForge.IntegrationTests/
 ```
 
-This is a possible implementation layout, not a requirement to create four assemblies immediately. Assembly boundaries should be introduced only where they preserve meaningful dependency direction.
+Domain and Application share one assembly (`EventForge.Workflow`) for this baseline and are separated by folder and namespace. Further assemblies should be introduced only where they preserve meaningful dependency direction.
+
+**Direct project references (implemented):**
+
+| Project | Direct project references |
+| --- | --- |
+| EventForge.Api | EventForge.Workflow, EventForge.Infrastructure, EventForge.Simulation |
+| EventForge.Workflow | None |
+| EventForge.Infrastructure | EventForge.Workflow |
+| EventForge.Simulation | EventForge.Workflow |
+
+Workflow references no outer project; Infrastructure and Simulation do not reference each other or the API; the API is the only executable composition root. Application code may depend on Domain code; Domain code must not depend on Application code. Infrastructure implements future persistence and transaction adapters, and Simulation implements future synthetic agent and test-outcome adapters; neither decides domain transitions.
+
+**Enforcement status:** The projects are empty scaffolding with no types, ports, or behavior. Project-reference rules are structural; the Domain-to-Application namespace rule is documented only. No automated architecture enforcement exists until architecture tests are delivered in EVF-16.
 
 ### C# and .NET implementation guidance (proposed)
 

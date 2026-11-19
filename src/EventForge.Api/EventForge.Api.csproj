@@ -6,4 +6,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\EventForge.Workflow\EventForge.Workflow.csproj" />
+    <ProjectReference Include="..\EventForge.Infrastructure\EventForge.Infrastructure.csproj" />
+    <ProjectReference Include="..\EventForge.Simulation\EventForge.Simulation.csproj" />
+  </ItemGroup>
+
 </Project>
