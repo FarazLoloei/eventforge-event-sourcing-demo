@@ -1,0 +1,11 @@
+﻿# EVF-19: code-only Graphify scope. Allow-list: only C# source under src/ and tests/.
+*
+!/src/
+!/src/**/
+!/src/**/*.cs
+!/tests/
+!/tests/**/
+!/tests/**/*.cs
+bin/
+obj/
+graphify-out/
