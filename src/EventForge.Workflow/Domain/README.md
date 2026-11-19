@@ -6,4 +6,4 @@ Namespace: `EventForge.Workflow.Domain`
 
 **Dependency rule:** Domain code must not depend on Application code, ASP.NET Core, SQL or database libraries, or simulation types.
 
-Status: scaffolding only. No domain types exist yet. The Domain-to-Application rule is documented, not automatically enforced; enforcement is planned for EVF-16.
+Status: scaffolding only. No domain types exist yet. The Domain dependency rules are checked by the static architecture tests in `tests/EventForge.UnitTests` (EVF-16); with no Domain types yet, that production check is vacuous.

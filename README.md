@@ -5,7 +5,7 @@
 **An architectural proposal for deterministic, auditable AI-assisted software workflows.**
 
 > **Project status: Planning / Work in Progress**  
-> **Implementation status: Early scaffolding (EVF-14, EVF-15).** The repository contains architecture and delivery documentation plus a .NET 10 solution with one ASP.NET Core host (process-liveness health endpoint) and empty module and adapter projects. No workflow behavior, database schema, automated tests, architecture enforcement, or CI pipeline is claimed to exist yet. See [Local setup](#local-setup).
+> **Implementation status: Early scaffolding (EVF-14, EVF-15, EVF-16).** The repository contains architecture and delivery documentation, a .NET 10 solution with one ASP.NET Core host (process-liveness health endpoint), empty module and adapter projects, and an xUnit project with static architecture dependency tests. No workflow behavior, database schema, domain or PostgreSQL tests, or CI pipeline is claimed to exist yet. See [Local setup](#local-setup) and [Architecture tests](#architecture-tests).
 
 EventForge is an independent portfolio project exploring how **Event Sourcing, CQRS, Domain-Driven Design (DDD), and a Modular Monolith** can provide a reliable foundation for an AI-assisted software development workflow.
 
@@ -93,6 +93,7 @@ Run from the repository root:
 ```powershell
 dotnet restore EventForge.slnx
 dotnet build EventForge.slnx --no-restore
+dotnet test EventForge.slnx --no-build --no-restore
 dotnet run --project src/EventForge.Api --no-build --no-launch-profile -- --urls http://127.0.0.1:5080
 ```
 
@@ -104,7 +105,7 @@ curl.exe -i http://127.0.0.1:5080/health
 
 Expected result: `HTTP/1.1 200 OK` with the body `Healthy`. The endpoint reports basic process liveness only; it does not check a database or any external service.
 
-Verified locally with SDK 10.0.404: restore and build succeed with 0 warnings and 0 errors, and `GET /health` returned `200 OK` with `Healthy`. This was a manual check; no automated tests or CI exist yet.
+Verified locally with SDK 10.0.404 (`restore --force`, then `build --no-incremental`): 0 warnings and 0 errors; `dotnet test` passed 33 of 33 tests (0 failed, 0 skipped); and `GET /health` returned `200 OK` with `Healthy`. The health check was manual. CI is not implemented; it is tracked by EVF-5.
 
 ### Implementation status
 
@@ -114,10 +115,11 @@ Verified locally with SDK 10.0.404: restore and build succeed with 0 warnings an
 | ASP.NET Core host (`src/EventForge.Api`) with `/health` liveness endpoint | Implemented |
 | Project scaffolding: `EventForge.Workflow` (Domain/Application folders), `EventForge.Infrastructure`, `EventForge.Simulation`, with the project references below | Implemented (empty; no types or behavior) |
 | Workflow domain and application behavior, adapter implementations | Not implemented |
-| Automated architecture enforcement of dependency rules (EVF-16) | Not implemented |
+| Static architecture dependency tests (`tests/EventForge.UnitTests`, EVF-16) | Implemented; limited to the checks listed under [Architecture tests](#architecture-tests) |
+| Domain behavior tests, PostgreSQL integration tests | Not implemented |
 | PostgreSQL, Docker Compose, event store, projections, replay, upcasting | Not implemented |
 | REST workflow endpoints, authentication and authorization | Not implemented |
-| xUnit and architecture tests, GitHub Actions CI | Not implemented |
+| GitHub Actions CI (EVF-5), dependency injection composition (EVF-17) | Not implemented |
 
 ### Solution structure
 
@@ -129,6 +131,8 @@ src/
     Application/              # EventForge.Workflow.Application (README only)
   EventForge.Infrastructure/  # Future persistence and transaction adapters
   EventForge.Simulation/      # Future synthetic agent/test-outcome adapters
+tests/
+  EventForge.UnitTests/       # xUnit; architecture dependency tests only (no production references)
 ```
 
 Direct project references:
@@ -140,7 +144,23 @@ Direct project references:
 | EventForge.Infrastructure | Workflow |
 | EventForge.Simulation | Workflow |
 
-Task Workflow is the only bounded context; Simulation is an adapter. These rules are documented, not automatically enforced; architecture tests are planned for EVF-16.
+Task Workflow is the only bounded context; Simulation is an adapter. Application may depend inward on Domain; Domain depends on neither Application, the API, adapters, HTTP, nor SQL libraries; Infrastructure and Simulation depend inward on Workflow and not on each other or the API.
+
+### Architecture tests
+
+`tests/EventForge.UnitTests` holds the only test project. Its tests read the repository's own files at run time; they reference no production project and do not use Graphify.
+
+**Implemented checks** (one shared checker, `ArchitectureRuleChecker`, is used by both the production tests and the fixtures):
+
+- **Project references:** the actual `.csproj` files, parsed as XML, must match the approved matrix above exactly. Unexpected or missing references, circular references, production references to test projects, unresolved projects and unsupported MSBuild constructs are reported.
+- **Namespace dependencies:** Roslyn syntax trees and semantic models over `src/**/*.cs` (excluding `bin`, `obj` and generated files), resolved against the .NET framework assemblies. Domain must not depend on Application, API, Infrastructure, Simulation, `Microsoft.AspNetCore`, `System.Net.Http`, `System.Data`, Npgsql, Entity Framework Core or common SQL client namespaces. Application must not depend on API, Infrastructure or Simulation. Infrastructure and Simulation must not depend on each other or on the API. Folder-to-namespace ownership is also checked using the fully resolved namespace of each top-level type (nested namespace blocks are accepted). Hand-written Workflow source outside `Workflow/Domain/` and `Workflow/Application/` is rejected, and API files may not declare Workflow, Infrastructure or Simulation namespaces (the top-level `Program.cs` declares none). Violations report file, line, source namespace, target and rule.
+- **Fail-closed analysis:** a compilation error in a rule-scoped file is reported as `analysis-incomplete` rather than silently passing.
+
+**Fixture coverage:** synthetic sources (compiled in an isolated context, never added to the production projects) run through the same checker. One valid layout and one valid nested-namespace layout are accepted; 20 forbidden scenarios are each rejected for the intended rule on exactly the marked lines (Domain to Application, HTTP, SQL, Npgsql, Entity Framework, Infrastructure and Simulation; Application to API; Infrastructure and Simulation to each other; alias, fully qualified, unqualified and implicit-using references; references in fields, parameters, return types, base types, generic arguments and member access; namespace mismatch; unresolved symbol; Workflow root files declaring Domain or Application namespaces; API declaring a Workflow namespace). Project-reference fixtures cover an outward dependency, a circular dependency, a production-to-test reference, a missing reference, an unresolved reference and a conditional reference.
+
+**Current absence of domain code:** at the time of EVF-16 the production scan analyzed 1 file (`EventForge.Api/Program.cs`, no types) and **0 files and 0 types** in Workflow, Domain, Application, Infrastructure and Simulation. The production namespace test therefore currently proves nothing about domain isolation; the fixtures demonstrate that the checker works, and the production check becomes meaningful as types are added.
+
+**Limitations:** static analysis only. It does not evaluate MSBuild (conditions, imports and `Directory.Build.props` are not expanded; a conditional `ProjectReference` or an `Import` in a project file is reported rather than followed), does not inspect `PackageReference` items, does not detect reflection, dynamically loaded assemblies or runtime behavior, and does not cover every framework namespace. The checker assumes `ImplicitUsings` as enabled by the SDK. All source files are analyzed in one combined Roslyn compilation that references only the .NET framework assemblies: no NuGet package or project references are loaded, so a type from an unreferenced package is an unresolved symbol (reported as `analysis-incomplete` in rule-scoped layers, never as a pass), the same simple type name in different layers is not isolated per project, and `Api` files are only checked for namespace ownership, not dependencies. Architecture tests are not run by CI, which is not implemented (EVF-5), and they do not replace human review.
 
 ## Engineering principles
 
