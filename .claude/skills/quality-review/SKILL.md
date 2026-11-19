@@ -7,7 +7,7 @@ description: Review EventForge changes, including AI-generated code, for xUnit t
 
 `AGENTS.md` ("Incremental tests and review", "Security and intellectual property") is authoritative. This skill is a short review procedure. It creates no gates and no tooling.
 
-Current status: documentation-only. No tests, CI or architecture checks exist until implemented and verified. Never claim otherwise, and don't add scaffolding to satisfy a documentation-only task.
+Current status: see the README for what is implemented and verified. No tests, CI or architecture checks exist unless implemented and verified. Never claim otherwise, and don't add scaffolding to satisfy a documentation-only task.
 
 ## Review order
 

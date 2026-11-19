@@ -5,7 +5,7 @@
 **An architectural proposal for deterministic, auditable AI-assisted software workflows.**
 
 > **Project status: Planning / Work in Progress**  
-> **Implementation status: Not started.** This repository currently contains architecture and delivery documentation only. No runnable API, database schema, automated tests, or CI pipeline is claimed to exist yet.
+> **Implementation status: Early scaffolding (EVF-14).** The repository contains architecture and delivery documentation plus a minimal .NET 10 solution with one ASP.NET Core host that exposes a process-liveness health endpoint. No workflow behavior, database schema, automated tests, or CI pipeline is claimed to exist yet. See [Local setup](#local-setup).
 
 EventForge is an independent portfolio project exploring how **Event Sourcing, CQRS, Domain-Driven Design (DDD), and a Modular Monolith** can provide a reliable foundation for an AI-assisted software development workflow.
 
@@ -83,6 +83,39 @@ The MVP will provide explicit lifecycle commands, simulated outcomes, status que
 Domain, PostgreSQL, concurrency, replay, and architecture tests will grow incrementally. Engineering guardrails, reproducible local setup, and GitHub Actions are MVP requirements.
 
 Snapshots, durable request idempotency, online projection rebuilding, event branching, isolated preview environments, and controlled side-effect execution are deferred. All capabilities remain proposed; see [the roadmap](docs/roadmap.md) for acceptance criteria.
+
+## Local setup
+
+**Prerequisite:** .NET SDK 10.0.404. `global.json` pins this version and allows only later patch releases (`rollForward: latestPatch`, no prerelease). No database, Docker, or credentials are required.
+
+Run from the repository root:
+
+```powershell
+dotnet restore EventForge.slnx
+dotnet build EventForge.slnx --no-restore
+dotnet run --project src/EventForge.Api --no-build --no-launch-profile -- --urls http://127.0.0.1:5080
+```
+
+In a separate terminal, verify the health endpoint:
+
+```powershell
+curl.exe -i http://127.0.0.1:5080/health
+```
+
+Expected result: `HTTP/1.1 200 OK` with the body `Healthy`. The endpoint reports basic process liveness only; it does not check a database or any external service.
+
+Verified locally with SDK 10.0.404: restore and build succeed with 0 warnings and 0 errors, and `GET /health` returned `200 OK` with `Healthy`. This was a manual check; no automated tests or CI exist yet.
+
+### Implementation status
+
+| Area | Status |
+| --- | --- |
+| Solution (`EventForge.slnx`) and SDK pin (`global.json`) | Implemented |
+| ASP.NET Core host (`src/EventForge.Api`) with `/health` liveness endpoint | Implemented |
+| Workflow domain/application layers, infrastructure and simulation projects | Not implemented |
+| PostgreSQL, Docker Compose, event store, projections, replay, upcasting | Not implemented |
+| REST workflow endpoints, authentication and authorization | Not implemented |
+| xUnit and architecture tests, GitHub Actions CI | Not implemented |
 
 ## Engineering principles
 

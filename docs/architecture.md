@@ -1,7 +1,7 @@
 # EventForge — Architecture Proposal
 
 > **Status: Proposed / Not implemented**  
-> This document specifies an intended architecture. It does not describe a running system. Decisions are deliberately scoped to a small, auditable proof of concept.
+> This document specifies an intended architecture. It does not describe a running system; so far only a minimal ASP.NET Core host with a `/health` liveness endpoint exists (EVF-14). Decisions are deliberately scoped to a small, auditable proof of concept.
 
 ## 1. Goals, scope, and constraints
 
@@ -60,7 +60,7 @@ Arrows show conceptual execution flow, not source-code dependencies. The bounded
 
 `Task Workflow` is the bounded context; `Execution Simulation` is intentionally an adapter, **not** an artificially independent bounded context. Read models remain owned by the Workflow domain while their storage implementation stays in infrastructure. Modules will communicate through explicit application contracts rather than through one another's tables or implementation types.
 
-### Future code organization (not yet created)
+### Future code organization (only `src/EventForge.Api` exists so far)
 
 ```text
 src/
