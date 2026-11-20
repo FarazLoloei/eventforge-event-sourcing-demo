@@ -15,3 +15,16 @@ public sealed class PostgresFactAttribute : FactAttribute
         }
     }
 }
+
+/// <summary>The theory counterpart of <see cref="PostgresFactAttribute"/>, skipped under the same conditions.</summary>
+public sealed class PostgresTheoryAttribute : TheoryAttribute
+{
+    public PostgresTheoryAttribute()
+    {
+        if (!PostgresTestGuard.IsEnabled)
+        {
+            Skip = $"Set {PostgresTestGuard.EnabledVariable}={PostgresTestGuard.EnabledValue} and " +
+                   $"{PostgresTestGuard.AdminConnectionVariable} to run against an isolated PostgreSQL 17.";
+        }
+    }
+}
