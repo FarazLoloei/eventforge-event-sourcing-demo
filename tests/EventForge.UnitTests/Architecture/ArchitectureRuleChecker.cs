@@ -38,6 +38,12 @@ public sealed record AnalysisResult(
     IReadOnlyDictionary<ModuleLayer, int> TypesByLayer);
 
 /// <summary>
+/// A NuGet package whose assembly the checker may load as metadata. Anything not listed stays unresolved,
+/// so unapproved packages still surface as <c>analysis-incomplete</c>.
+/// </summary>
+public sealed record ApprovedPackage(string AssemblyFile, string AssemblyName, int MajorVersion);
+
+/// <summary>
 /// The approved dependency rules. These are authored independently of the actual project files
 /// and sources, which are what the checker compares against them.
 /// </summary>
@@ -51,6 +57,12 @@ public static class ApprovedRules
             ["EventForge.Infrastructure"] = ["EventForge.Workflow"],
             ["EventForge.Simulation"] = ["EventForge.Workflow"],
         };
+
+    /// <summary>Package assemblies (beyond the .NET framework) that source analysis may resolve. EVF-21: Npgsql.</summary>
+    public static IReadOnlyList<ApprovedPackage> Packages { get; } =
+    [
+        new("Npgsql.dll", "Npgsql", 10),
+    ];
 
     public static IReadOnlyList<NamespaceRule> Namespaces { get; } =
     [
@@ -77,6 +89,7 @@ public static class ApprovedRules
             "EventForge.Api",
             "EventForge.Infrastructure",
             "EventForge.Simulation",
+            "Npgsql",
         ]),
         new(ModuleLayer.Infrastructure,
         [
@@ -87,6 +100,7 @@ public static class ApprovedRules
         [
             "EventForge.Infrastructure",
             "EventForge.Api",
+            "Npgsql",
         ]),
     ];
 }
@@ -115,6 +129,8 @@ public static class ArchitectureRuleChecker
         "global using global::System.Threading.Tasks;\n";
 
     private static readonly Lazy<IReadOnlyList<MetadataReference>> FrameworkReferences = new(LoadFrameworkReferences);
+    private static readonly Lazy<IReadOnlyList<MetadataReference>> PackageReferences =
+        new(() => LoadPackageReferences(ApprovedRules.Packages, AppContext.BaseDirectory));
 
     // ---------------------------------------------------------------- repository access
 
@@ -394,7 +410,7 @@ public static class ArchitectureRuleChecker
         var compilation = CSharpCompilation.Create(
             "ArchitectureAnalysis",
             trees,
-            FrameworkReferences.Value,
+            FrameworkReferences.Value.Concat(PackageReferences.Value),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
 
         var violations = new List<ArchitectureViolation>();
@@ -635,6 +651,37 @@ public static class ArchitectureRuleChecker
                 throw new InvalidOperationException(
                     $"Framework metadata reference '{required}' not found in '{frameworkDirectory}'; semantic analysis would be unreliable.");
             }
+        }
+
+        return references;
+    }
+
+    /// <summary>
+    /// Loads approved package assemblies from <paramref name="directory"/> (the test output folder, where the
+    /// test project's PackageReference places them). Fails closed: a missing or mismatched assembly throws
+    /// rather than letting Npgsql symbols silently go unresolved or resolve to something else.
+    /// </summary>
+    public static IReadOnlyList<MetadataReference> LoadPackageReferences(IEnumerable<ApprovedPackage> packages, string directory)
+    {
+        var references = new List<MetadataReference>();
+        foreach (var package in packages)
+        {
+            var path = Path.Combine(directory, package.AssemblyFile);
+            if (!File.Exists(path))
+            {
+                throw new InvalidOperationException(
+                    $"Approved package assembly '{package.AssemblyFile}' not found in '{directory}'; semantic analysis would be unreliable.");
+            }
+
+            var identity = System.Reflection.AssemblyName.GetAssemblyName(path);
+            if (!string.Equals(identity.Name, package.AssemblyName, StringComparison.Ordinal) ||
+                identity.Version?.Major != package.MajorVersion)
+            {
+                throw new InvalidOperationException(
+                    $"'{path}' is {identity.Name} {identity.Version}, expected {package.AssemblyName} {package.MajorVersion}.x.");
+            }
+
+            references.Add(MetadataReference.CreateFromFile(path));
         }
 
         return references;

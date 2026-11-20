@@ -51,6 +51,40 @@ public sealed class ArchitectureRuleTests
     }
 
     [Fact]
+    public void InfrastructureUsingApprovedNpgsql_IsAccepted_WithoutAnalysisErrors()
+    {
+        var result = Analyze(ArchitectureFixtures.ValidInfrastructureNpgsqlUsage);
+
+        Assert.True(result.Violations.Count == 0, ArchitectureRuleChecker.Format(result.Violations));
+        Assert.Equal(2, result.TypesByLayer[ModuleLayer.Infrastructure]);
+    }
+
+    [Fact]
+    public void MissingApprovedPackageAssembly_FailsClosed()
+    {
+        var empty = Directory.CreateTempSubdirectory("eventforge-no-packages-");
+        try
+        {
+            var exception = Assert.Throws<InvalidOperationException>(() =>
+                ArchitectureRuleChecker.LoadPackageReferences(ApprovedRules.Packages, empty.FullName));
+            Assert.Contains("Npgsql.dll", exception.Message);
+        }
+        finally
+        {
+            empty.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ApprovedPackageOfWrongMajorVersion_FailsClosed()
+    {
+        var wrong = new[] { new ApprovedPackage("Npgsql.dll", "Npgsql", 9) };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            ArchitectureRuleChecker.LoadPackageReferences(wrong, AppContext.BaseDirectory));
+    }
+
+    [Fact]
     public void ValidNestedNamespaces_AreAccepted_UsingResolvedNamespaces()
     {
         var result = Analyze(ArchitectureFixtures.ValidNestedNamespaces);

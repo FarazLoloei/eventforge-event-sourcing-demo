@@ -10,11 +10,11 @@
 EventForge is an independent portfolio project exploring how **Event Sourcing, CQRS, Domain-Driven Design (DDD) and a Modular Monolith** can provide a reliable foundation for an AI-assisted software development workflow. The planned implementation uses **C# / .NET 10 and PostgreSQL**. AI agents will be **simulated**: the goal is to demonstrate the correctness of the workflow engine, not to integrate an LLM service.
 
 > **Current status: Active development — engineering foundation implemented, workflow behavior planned.**
-> The repository contains a verified .NET 10 solution, a minimal ASP.NET Core host, Clean Architecture project scaffolding, validated dependency injection, automated architecture dependency tests and a working GitHub Actions baseline CI pipeline. **EventForge is not yet a working workflow engine:** no domain behavior, event store, database, projections or workflow endpoints exist. Everything under [Why EventForge?](#why-eventforge), [Architecture](#architecture) (planned runtime and lifecycle) and [Roadmap](#roadmap) describes intended design, not delivered functionality.
+> The repository contains a verified .NET 10 solution, a minimal ASP.NET Core host, Clean Architecture project scaffolding, validated dependency injection, automated architecture dependency tests, a working GitHub Actions baseline CI pipeline and (EVF-21) PostgreSQL connectivity code, native launch configuration, optional Docker files and provisioning SQL. **EventForge is not yet a working workflow engine:** no domain behavior, event store, database tables, projections or workflow endpoints exist, and, per the [verification status](#development-environment-evf-21), the owner's existing PostgreSQL passed an owner-run check, Visual Studio was owner-reported healthy, VS Code launch is not independently verified and CI has not yet run for EVF-21. Everything under [Why EventForge?](#why-eventforge), [Architecture](#architecture) (planned runtime and lifecycle) and [Roadmap](#roadmap) describes intended design, not delivered functionality.
 
 ## Engineering highlights
 
-- **Verified baseline:** .NET 10 SDK pinned by `global.json`; Release build with 0 warnings and 0 errors and 33 passing tests, confirmed locally and in GitHub Actions (see [Continuous integration](#continuous-integration)).
+- **Verified baseline:** .NET 10 SDK pinned by `global.json`; Release build with 0 warnings and 0 errors; 33 passing tests confirmed in GitHub Actions at the EVF-5 baseline (see [Continuous integration](#continuous-integration)) and 42 passing tests in a reported local run after EVF-21 (not CI evidence; CI has not yet executed for EVF-21).
 - **Architecture enforced by tests:** project references and namespace dependencies are checked from the real `.csproj` files and Roslyn semantic analysis, including fixtures that prove forbidden dependencies are rejected.
 - **Clean Architecture from the first commit:** Workflow owns the domain; HTTP, persistence and simulation are adapters that depend inward.
 - **Fail-closed validation:** built-in DI with `ValidateOnBuild` and `ValidateScopes`; static analysis reports `analysis-incomplete` rather than silently passing.
@@ -34,13 +34,18 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | Native DI with `ValidateOnBuild` and `ValidateScopes` (EVF-17) | Implemented; only health checks are explicitly registered |
 | xUnit project with Roslyn-based architecture dependency tests (EVF-16) | Implemented; limited to the checks in [Automated architecture validation](#automated-architecture-validation) |
 | GitHub Actions baseline CI with TRX test-result artifacts (EVF-5) | Implemented and verified, including controlled failure and recovery; see [Continuous integration](#continuous-integration) |
+| Npgsql 10.0.3 connectivity in Infrastructure: `PostgreSqlDatabase` owns one `NpgsqlDataSource` (singleton, disposed by the container, created lazily) and a read-only `--verify-database` check (EVF-21) | Implemented; verified locally against an isolated Compose PostgreSQL 17.12 (authentication, `--verify-database` natively and in the Compose network); owner-run check against the owner's existing PostgreSQL 17.11 (`127.0.0.1:5434`) **passed** |
+| Launch profiles, VS Code configuration, user-secrets support (EVF-21) | Implemented; credential-free; `dotnet run` exercised by the author; Visual Studio launch and `/health` owner-reported healthy; VS Code launch **not independently verified** |
+| `Dockerfile`, `.dockerignore`, `compose.yaml`, `.env.example` (EVF-21) | Implemented; image built, stack started, `/health` 200 and `docker compose down` verified locally (not CI) |
+| `db/provisioning/001-provision.sql` role/database/schema provisioning (EVF-21) | Implemented; executed once on a fresh isolated Compose volume (roles, database, schema and privileges checked); never run against any existing server |
+| Architecture checker resolves the approved Npgsql package (EVF-21) | Implemented and verified by tests; see [Automated architecture validation](#automated-architecture-validation) |
 | Engineering governance documents ([AGENTS.md](AGENTS.md), PR and commit templates) | Documented; enforcement is partial (see [governance](#ai-assisted-engineering-and-governance)) |
 
 ### Planned, not implemented
 
 | Area | Status |
 | --- | --- |
-| PostgreSQL and Docker Compose | Planned |
+| Database schema, tables and migrations | Planned (Tasks 3, 6; the API never runs migrations at startup) |
 | Event store (append/load, envelope, unique stream-version constraint) | Planned |
 | Domain aggregates and workflow behavior | Planned |
 | CQRS command/query handlers and REST workflow endpoints | Planned |
@@ -77,7 +82,7 @@ These are the actual direct project references, enforced by the architecture tes
 ```mermaid
 flowchart TB
     Api["EventForge.Api<br/>composition root, /health"]
-    Infra["EventForge.Infrastructure<br/>(empty scaffolding)"]
+    Infra["EventForge.Infrastructure<br/>PostgreSQL connectivity (Npgsql)"]
     Sim["EventForge.Simulation<br/>(empty scaffolding)"]
     Workflow["EventForge.Workflow<br/>Domain and Application folders<br/>(one assembly, no production types)"]
     Tests["EventForge.UnitTests<br/>(no production references)"]
@@ -96,6 +101,8 @@ flowchart TB
 | EventForge.Infrastructure | Workflow |
 | EventForge.Simulation | Workflow |
 | EventForge.Workflow | None |
+
+The only third-party package is **Npgsql 10.0.3**, referenced by `EventForge.Infrastructure` alone (a test enforces this). Domain and Application contain no production types.
 
 Domain and Application currently share the single `EventForge.Workflow` assembly, separated by folder and namespace, and contain no production types. Further internal dependencies (for example Application depending inward on Domain, or Infrastructure implementing Application-owned ports) are **intended rules, not existing code**. The dotted test edge is not a project reference.
 
@@ -179,8 +186,9 @@ Events are immutable, versioned facts. Examples and artifact references are synt
 | Tests | xUnit, Roslyn (architecture tests) | In use |
 | Continuous integration | GitHub Actions | In use (baseline) |
 | Architecture style | Modular Monolith, DDD, Event Sourcing, CQRS, Clean Architecture | Structure in place; behavior planned |
-| Primary data store | PostgreSQL (including JSONB event payloads) | Planned |
-| Local database environment | Docker Compose | Planned |
+| Primary data store | PostgreSQL 17 (including JSONB event payloads) | Connectivity code only; no schema or tables yet |
+| Database access | Npgsql 10.0.3, direct parameterized SQL, no ORM | In use (connectivity verification only) |
+| Optional local environment | Docker Compose (PostgreSQL 17, API container) | Verified locally in an isolated stack (not CI) |
 
 ## Repository structure
 
@@ -190,11 +198,14 @@ src/
   EventForge.Workflow/        # Task Workflow bounded context (one assembly)
     Domain/                   # EventForge.Workflow.Domain (README only)
     Application/              # EventForge.Workflow.Application (README only)
-  EventForge.Infrastructure/  # Future persistence and transaction adapters
+  EventForge.Infrastructure/  # PostgreSQL connectivity (Npgsql); future persistence adapters
   EventForge.Simulation/      # Future synthetic agent/test-outcome adapters
 tests/
   EventForge.UnitTests/       # xUnit; architecture dependency tests only (no production references)
-docs/                         # Architecture, roadmap, ADR 0001
+docs/                         # Architecture, roadmap, ADR 0001, development guide
+db/provisioning/              # Fresh-environment role/database/schema SQL (run once on an isolated volume)
+Dockerfile, compose.yaml      # Optional Docker support (.dockerignore, .env.example)
+.vscode/                      # Credential-free VS Code launch and task configuration
 .github/workflows/ci.yml      # Baseline CI
 ```
 
@@ -202,7 +213,7 @@ Task Workflow is the only bounded context; Simulation is an adapter. Domain depe
 
 ## Getting started
 
-**Prerequisite:** .NET SDK 10.0.404. `global.json` pins this version and allows only later patch releases (`rollForward: latestPatch`, no prerelease). No database, Docker or credentials are required.
+**Prerequisite:** .NET SDK 10.0.404. `global.json` pins this version and allows only later patch releases (`rollForward: latestPatch`, no prerelease). No database, Docker or credentials are required to build, test or run the API. See [Development environment](#development-environment-evf-21) for PostgreSQL, IDEs and Docker.
 
 Run from the repository root:
 
@@ -237,9 +248,36 @@ dotnet test EventForge.slnx -c Release --no-build --no-restore
 
 ## Dependency injection
 
-`src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container. `ValidateOnBuild` and `ValidateScopes` are enabled explicitly in all environments. The only explicit service registration is the health-check infrastructure (`AddHealthChecks()`); Workflow, Infrastructure and Simulation registrations are deferred until real services exist, and nothing for them is registered or validated today.
+`src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container. `ValidateOnBuild` and `ValidateScopes` are enabled explicitly in all environments. The explicit registrations are the health-check infrastructure (`AddHealthChecks()`) and, since EVF-21, a singleton `PostgreSqlDatabase` (one pooled `NpgsqlDataSource`, disposed by the container) created through a factory on first resolution, so the host starts without database credentials. Workflow and Simulation registrations are deferred until real services exist, and nothing for them is registered or validated today. `ValidateOnBuild` does not invoke the factory, so a missing connection string surfaces only when the database is first resolved (for example by `--verify-database`).
 
 Policy for future services: concrete services are registered explicitly in the API; Application owns its ports and adapters implement them; services use constructor injection; the domain is independent of the container; singletons must be safe for concurrent use; scoped services use a request or unit-of-work lifetime; circular and captive scoped dependencies are forbidden. Lifetimes are chosen from actual implementations. These options give baseline validation only: they do not guarantee that every runtime dependency path, factory implementation or open generic registration is valid. See [the architecture document](docs/architecture.md#composition-root-and-dependency-injection-evf-17).
+
+## Development environment (EVF-21)
+
+Details, commands and limits are in [docs/development.md](docs/development.md). Summary:
+
+- **Mode 1: local development (default for the project owner).** The API runs natively (Visual Studio `http` profile, VS Code `.vscode/launch.json`, or `dotnet run`) with full debugging, breakpoints and hot reload where supported. PostgreSQL runs in the owner's existing Docker container at `127.0.0.1:5434`, database `eventforge`; the API is not run in Docker and no unrelated project, database or existing infrastructure is modified. Launch profiles and VS Code files contain no credentials or database endpoints.
+- **Mode 2: company evaluation / fresh clone.** Reviewers need only Docker Engine with Compose v2 (no Visual Studio, no PostgreSQL installation): copy `.env.example` to `.env`, fill in the blank passwords, then `docker compose --profile full up -d --build`. This starts PostgreSQL 17 (host `127.0.0.1:5535`) and the API (`http://127.0.0.1:8080`), both loopback-only by default. Readiness, verification and non-destructive shutdown (`docker compose --profile full down`, which keeps the data volume) are in [docs/development.md](docs/development.md#mode-2-company-evaluation--fresh-clone).
+- **Same code in both modes.** Both modes run the same application code and the same configuration model; only values supplied through standard ASP.NET Core overrides (`ConnectionStrings__EventForge`, `ASPNETCORE_ENVIRONMENT`) differ. There is no Docker-specific implementation or business logic. Docker is optional for development and a supported evaluation path. This is an owner-approved development and evaluation strategy, not a production deployment decision.
+- **Configuration:** the standard `ConnectionStrings:EventForge` setting, supplied by .NET User Secrets (local development) or the `ConnectionStrings__EventForge` environment variable. Nothing is committed. The API builds, starts and serves `/health` without it; `/health` remains a liveness check and does not touch the database.
+- **Explicit verification:** `dotnet run --project src/EventForge.Api --launch-profile verify-database` connects with the runtime credentials, runs one `SELECT` in a `READ ONLY` transaction and checks role attributes and schema access. It exits non-zero with a clear message when it cannot connect. It is not a health check and proves nothing about tables or event-store behavior.
+- **Optional helper:** `docker compose --profile db up -d` starts only the Compose PostgreSQL (port 5535) for a native API. It is not a separate mode.
+- **Provisioning:** `db/provisioning/001-provision.sql` is a script for fresh servers, designed to be repeatable and non-destructive (initial provisioning verified; re-execution has not yet been validated), that creates the `eventforge_migrator`, `eventforge_app` and `eventforge_operator` roles, the `eventforge` database and schema, with schema `USAGE` only for the runtime and maintenance roles. It creates no tables, grants no table privileges and runs no migrations.
+
+| Capability | Status |
+| --- | --- |
+| Connectivity code, configuration, launch profiles, Compose and provisioning files | Implemented |
+| Release build (0 warnings, 0 errors), 42 tests, vulnerability audit (no findings), Compose configuration validation | Reported local verification (not CI) |
+| Mode 2 in an isolated stack: PostgreSQL 17.12 provisioned, roles and privileges checked, host-port password authentication (wrong password rejected), native `--verify-database` passed, image built, API `/health` 200, `--verify-database` inside the Compose network passed, `docker compose down` kept the volume | Reported local verification (not CI) |
+| Mode 1: runtime-role `--verify-database` against the owner's existing PostgreSQL 17.11 (`127.0.0.1:5434`) | **Passed** (owner-run, November 20, 2026; not re-run by the author) |
+| Mode 1: Visual Studio native API launch, `/health` | **Healthy** (owner-reported) |
+| Mode 1: Visual Studio Code native launch | **Not independently verified** |
+| Provisioning script re-execution (second run on an existing volume) | **Not validated** |
+| Pull-request CI for EVF-21 | **Not yet executed**; the workflow is unchanged, builds no containers and has no PostgreSQL gate |
+
+Local verification used a throwaway, git-ignored `.env` and a Compose volume; both are intentionally preserved and nothing removes them automatically. In the Docker runtime image the API prints a nonfatal `libgssapi_krb5.so.2` warning (Npgsql probing for Kerberos); and because the official PostgreSQL image trusts loopback connections inside the container, an in-container `127.0.0.1` test is not proof of password authentication. See [docs/development.md](docs/development.md).
+
+Security limits: credentials are protected only by user secrets or environment variables (not encrypted at rest); the Compose stack is for local use (loopback, no TLS, passwords in container environment); role separation is provisioned but table-level least-privilege grants, append-only enforcement and operator rights do not exist until the tables do. These are limitations, not delivered safeguards.
 
 ## Continuous integration
 
@@ -308,14 +346,15 @@ The EVF-5 baseline CI implementation and verification are **complete**: the work
 **Implemented checks**
 
 - **Project references:** the actual `.csproj` files, parsed as XML, must match the approved matrix above exactly. Unexpected or missing references, circular references, production references to test projects, unresolved projects and unsupported MSBuild constructs are reported.
-- **Namespace dependencies:** Roslyn syntax trees and semantic models over `src/**/*.cs` (excluding `bin`, `obj` and generated files), resolved against the .NET framework assemblies. Domain must not depend on Application, API, Infrastructure, Simulation, `Microsoft.AspNetCore`, `System.Net.Http`, `System.Data`, Npgsql, Entity Framework Core or common SQL client namespaces. Application must not depend on API, Infrastructure or Simulation. Infrastructure and Simulation must not depend on each other or on the API. Folder-to-namespace ownership is checked using the fully resolved namespace of each top-level type (nested namespace blocks are accepted). Hand-written Workflow source outside `Workflow/Domain/` and `Workflow/Application/` is rejected, and API files may not declare Workflow, Infrastructure or Simulation namespaces. Violations report file, line, source namespace, target and rule.
+- **Namespace dependencies:** Roslyn syntax trees and semantic models over `src/**/*.cs` (excluding `bin`, `obj` and generated files), resolved against the .NET framework assemblies. Domain must not depend on Application, API, Infrastructure, Simulation, `Microsoft.AspNetCore`, `System.Net.Http`, `System.Data`, Npgsql, Entity Framework Core or common SQL client namespaces. Application must not depend on API, Infrastructure, Simulation or Npgsql. Infrastructure and Simulation must not depend on each other or on the API, and Simulation must not depend on Npgsql: Npgsql is permitted only in Infrastructure. Folder-to-namespace ownership is checked using the fully resolved namespace of each top-level type (nested namespace blocks are accepted). Hand-written Workflow source outside `Workflow/Domain/` and `Workflow/Application/` is rejected, and API files may not declare Workflow, Infrastructure or Simulation namespaces. Violations report file, line, source namespace, target and rule.
 - **Fail-closed analysis:** a compilation error in a rule-scoped file is reported as `analysis-incomplete` rather than silently passing.
+- **Approved package metadata (EVF-21):** besides the framework, the checker loads exactly one explicitly approved package assembly, `Npgsql.dll`, from the test output folder (placed there by the test project's `PackageReference`). It throws if the file is missing or is not Npgsql 10.x, so a missing reference can never silently pass. A test asserts that the checker's Npgsql version equals the one in `EventForge.Infrastructure.csproj` and that no other production project references Npgsql. Unresolved symbols are still never suppressed: a type from any other package remains `analysis-incomplete`.
 
-**Fixture coverage:** synthetic sources (compiled in an isolated context, never added to the production projects) run through the same checker. One valid layout and one valid nested-namespace layout are accepted; 20 forbidden scenarios are each rejected for the intended rule on exactly the marked lines (Domain to Application, HTTP, SQL, Npgsql, Entity Framework, Infrastructure and Simulation; Application to API; Infrastructure and Simulation to each other; alias, fully qualified, unqualified and implicit-using references; references in fields, parameters, return types, base types, generic arguments and member access; namespace mismatch; unresolved symbol; Workflow root files declaring Domain or Application namespaces; API declaring a Workflow namespace). Project-reference fixtures cover an outward dependency, a circular dependency, a production-to-test reference, a missing reference, an unresolved reference and a conditional reference.
+**Fixture coverage:** synthetic sources (compiled in an isolated context, never added to the production projects) run through the same checker. One valid layout and one valid nested-namespace layout are accepted; 24 forbidden scenarios are each rejected for the intended rule on exactly the marked lines (Domain to Application, HTTP, SQL, Npgsql (including `using Npgsql` and `NpgsqlDataSource`), Entity Framework, Infrastructure and Simulation; Application to API and to Npgsql; Simulation to Npgsql; Infrastructure and Simulation to each other; alias, fully qualified, unqualified and implicit-using references; references in fields, parameters, return types, base types, generic arguments and member access; namespace mismatch; unresolved symbol; Workflow root files declaring Domain or Application namespaces; API declaring a Workflow namespace). One valid fixture shows Infrastructure code using `NpgsqlDataSource` accepted without analysis errors, and one shows a type from an unapproved package (`Dapper`) still rejected as `analysis-incomplete`. Project-reference fixtures cover an outward dependency, a circular dependency, a production-to-test reference, a missing reference, an unresolved reference and a conditional reference.
 
-**Current absence of domain code:** at the time of EVF-16 the production scan analyzed 1 file (`EventForge.Api/Program.cs`, no types) and **0 files and 0 types** in Workflow, Domain, Application, Infrastructure and Simulation. The production namespace test therefore currently proves nothing about domain isolation; the fixtures demonstrate that the checker works, and the production check becomes meaningful as types are added.
+**Current absence of domain code:** at the time of EVF-16 the production scan analyzed 1 file (`EventForge.Api/Program.cs`, no types) and **0 files and 0 types** in Workflow, Domain, Application, Infrastructure and Simulation. Since EVF-21, Infrastructure contains the PostgreSQL connectivity types (analyzed with the real Npgsql metadata), while Workflow, Domain, Application and Simulation remain empty. The production namespace test therefore still proves nothing about domain isolation; the fixtures demonstrate that the checker works, and the production check becomes meaningful as types are added.
 
-**Limitations:** static analysis only. It does not evaluate MSBuild (conditions, imports and `Directory.Build.props` are not expanded; a conditional `ProjectReference` or an `Import` in a project file is reported rather than followed), does not inspect `PackageReference` items, does not detect reflection, dynamically loaded assemblies or runtime behavior, and does not cover every framework namespace. The checker assumes `ImplicitUsings` as enabled by the SDK. All source files are analyzed in one combined Roslyn compilation that references only the .NET framework assemblies: no NuGet package or project references are loaded, so a type from an unreferenced package is an unresolved symbol (reported as `analysis-incomplete` in rule-scoped layers, never as a pass), the same simple type name in different layers is not isolated per project, and API files are only checked for namespace ownership, not dependencies. The CI workflow runs these tests as part of the xUnit suite, but they do not replace human review.
+**Limitations:** static analysis only. It does not evaluate MSBuild (conditions, imports and `Directory.Build.props` are not expanded; a conditional `ProjectReference` or an `Import` in a project file is reported rather than followed), does not inspect `PackageReference` items (apart from the Npgsql placement and version test above), does not detect reflection, dynamically loaded assemblies or runtime behavior, and does not cover every framework namespace. The checker assumes `ImplicitUsings` as enabled by the SDK. All source files are analyzed in one combined Roslyn compilation that references the .NET framework assemblies and the single approved Npgsql assembly: no other NuGet package or project references are loaded, so a type from any other package is an unresolved symbol (reported as `analysis-incomplete` in rule-scoped layers, never as a pass), the same simple type name in different layers is not isolated per project, and API files are only checked for namespace ownership, not dependencies. The CI workflow runs these tests as part of the xUnit suite, but they do not replace human review.
 
 ## AI-assisted engineering and governance
 
@@ -328,7 +367,7 @@ EventForge is developed with AI assistance under explicit, repository-specific r
 - **Independent technical review:** AI-generated changes are treated as untrusted contributions and reviewed by a human.
 - **Automated architecture validation:** dependency tests run locally and in CI.
 - **Synthetic data and secret hygiene:** fixtures are original and synthetic; credentials, tokens and personal data stay out of events, artifacts, examples and logs.
-- **Optional local Graphify navigation:** a local, code-only graph can help navigate C# sources. It is not required for building or testing, and its token-efficiency evaluation is ongoing.
+- **Optional local Graphify navigation:** a local, code-only, deterministic graph (EVF-19, accepted by the project owner as an optional navigation aid) can help navigate C# sources. It is not required for building or testing, is not evidence of correctness, and no measured token savings are claimed.
 
 **Limits:** these are documented policies. Only the build, tests and architecture checks are automated; there is no automated enforcement of the full governance policy, commit linting or required status checks, and Git templates provide guidance, not enforcement.
 
@@ -339,7 +378,7 @@ The 12 roadmap tasks, milestones and MVP acceptance criteria are preserved in [d
 | Task | Area | Status |
 | --- | --- | --- |
 | 1 | Solution and architecture setup | Completed (EVF-13) |
-| 2 | PostgreSQL and Docker configuration | Planned |
+| 2 | PostgreSQL and Docker configuration | Partially implemented (EVF-21; VS Code launch, provisioning re-run and PR CI not yet verified) |
 | 3 | Event Store implementation | Planned |
 | 4 | Domain aggregates and event persistence | Planned |
 | 5 | CQRS commands and queries | Planned |
@@ -369,6 +408,7 @@ These conventions follow [Go code review guidance](https://go.dev/wiki/CodeRevie
 
 - [Architecture and data-flow proposal](docs/architecture.md)
 - [Implementation roadmap and MVP acceptance criteria](docs/roadmap.md)
+- [Development environment: native, Docker, configuration, provisioning](docs/development.md)
 - [ADR 0001: Architectural foundation](docs/adr/0001-architecture.md)
 - [AI agent governance and engineering rules](AGENTS.md) (documented policy; automated enforcement is not implemented)
 - [GitHub repository](https://github.com/FarazLoloei/eventforge-event-sourcing-demo)

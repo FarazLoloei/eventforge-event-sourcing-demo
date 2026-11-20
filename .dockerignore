@@ -1,0 +1,23 @@
+# Keep the build context small and free of local state or secrets.
+**/bin/
+**/obj/
+.git/
+.github/
+.vs/
+.vscode/
+.claude/
+graphify-out/
+tests/
+docs/
+db/
+*.md
+*.user
+*.log
+.env
+.env.*
+!.env.example
+**/appsettings.*.local.json
+**/secrets.json
+Dockerfile
+compose.yaml
+.dockerignore

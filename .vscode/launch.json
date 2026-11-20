@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "EventForge.Api (http://localhost:5080)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/EventForge.Api/bin/Debug/net10.0/EventForge.Api.dll",
+      "cwd": "${workspaceFolder}/src/EventForge.Api",
+      "args": ["--urls", "http://localhost:5080"],
+      "env": { "ASPNETCORE_ENVIRONMENT": "Development" },
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": "EventForge.Api: verify database",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/EventForge.Api/bin/Debug/net10.0/EventForge.Api.dll",
+      "cwd": "${workspaceFolder}/src/EventForge.Api",
+      "args": ["--verify-database"],
+      "env": { "ASPNETCORE_ENVIRONMENT": "Development" },
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+# EventForge optional Docker support. Nothing here is started by default and nothing is required for the
+# native workflow (dotnet CLI / Visual Studio / VS Code). See docs/development.md.
+#
+#   docker compose --profile db   up -d              # standalone PostgreSQL 17 only (API runs natively)
+#   docker compose --profile full up -d --build      # PostgreSQL 17 + API container
+#   docker compose --profile full down               # stop; the named volume (data) is kept
+#
+# Credentials come from the environment or a local, git-ignored .env file (copy .env.example). Required values
+# are validated by Compose; none are stored in this file. Validate with `docker compose config --quiet`:
+# plain `docker compose config` prints resolved values, including passwords.
+
+name: eventforge
+
+services:
+  postgres:
+    image: postgres:17
+    profiles: ["db", "full"]
+    restart: unless-stopped
+    environment:
+      # Administrative account of THIS stack's own server only; used for first-time provisioning.
+      POSTGRES_USER: ${EVENTFORGE_POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${EVENTFORGE_POSTGRES_ADMIN_PASSWORD:?Set EVENTFORGE_POSTGRES_ADMIN_PASSWORD (see .env.example)}
+      # Read by db/provisioning/001-provision.sql through psql \getenv.
+      EVENTFORGE_APP_PASSWORD: ${EVENTFORGE_APP_PASSWORD:?Set EVENTFORGE_APP_PASSWORD (see .env.example)}
+      EVENTFORGE_MIGRATOR_PASSWORD: ${EVENTFORGE_MIGRATOR_PASSWORD:?Set EVENTFORGE_MIGRATOR_PASSWORD (see .env.example)}
+      EVENTFORGE_OPERATOR_PASSWORD: ${EVENTFORGE_OPERATOR_PASSWORD:?Set EVENTFORGE_OPERATOR_PASSWORD (see .env.example)}
+    ports:
+      # Loopback only. The default avoids 5432-5434, which other local servers commonly use (the owner's existing server is on 5434).
+      - "127.0.0.1:${EVENTFORGE_POSTGRES_PORT:-5535}:5432"
+    volumes:
+      - eventforge_pgdata:/var/lib/postgresql/data
+      # Executed once, only when the volume is empty (first start). Designed to be non-destructive; re-execution not yet validated.
+      - ./db/provisioning/001-provision.sql:/docker-entrypoint-initdb.d/001-provision.sql:ro
+    healthcheck:
+      # -h 127.0.0.1 forces TCP: during first-time initialisation the temporary server listens on the
+      # Unix socket only, so a socket check would report ready too early.
+      # Healthy also requires the provisioned schema: if first-time provisioning failed, PostgreSQL's data
+      # directory already exists and the init scripts never re-run, so a bare pg_isready would report an
+      # unprovisioned server as ready. The admin password is read from the container's own environment.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U \"$$POSTGRES_USER\" && PGPASSWORD=\"$$POSTGRES_PASSWORD\" psql -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d eventforge -Atc \"SELECT 1 FROM pg_namespace WHERE nspname = 'eventforge'\" | grep -q 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Fixed on purpose: never inherit ASPNETCORE_ENVIRONMENT from the host shell (Mode 1 sets it to Development).
+      ASPNETCORE_ENVIRONMENT: Production
+      # Standard ASP.NET Core override of ConnectionStrings:EventForge. Runtime role only.
+      ConnectionStrings__EventForge: "Host=postgres;Port=5432;Database=eventforge;Username=eventforge_app;Password=${EVENTFORGE_APP_PASSWORD:?Set EVENTFORGE_APP_PASSWORD (see .env.example)};Search Path=eventforge"
+    ports:
+      - "127.0.0.1:${EVENTFORGE_API_PORT:-8080}:8080"
+
+volumes:
+  eventforge_pgdata:

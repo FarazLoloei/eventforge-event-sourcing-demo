@@ -1,0 +1,4 @@
+# Files executed or parsed by Linux containers must keep LF endings even when checked out on Windows
+# with core.autocrlf=true. Deliberately minimal: no repository-wide normalization.
+db/provisioning/*.sql text eol=lf
+Dockerfile text eol=lf
