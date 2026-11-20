@@ -10,11 +10,11 @@
 EventForge is an independent portfolio project exploring how **Event Sourcing, CQRS, Domain-Driven Design (DDD) and a Modular Monolith** can provide a reliable foundation for an AI-assisted software development workflow. The planned implementation uses **C# / .NET 10 and PostgreSQL**. AI agents will be **simulated**: the goal is to demonstrate the correctness of the workflow engine, not to integrate an LLM service.
 
 > **Current status: Active development — engineering foundation implemented, workflow behavior planned.**
-> The repository contains a verified .NET 10 solution, a minimal ASP.NET Core host, Clean Architecture project scaffolding, validated dependency injection, automated architecture dependency tests, a working GitHub Actions baseline CI pipeline and (EVF-21) PostgreSQL connectivity code, native launch configuration, optional Docker files and provisioning SQL. **EventForge is not yet a working workflow engine:** no domain behavior, event store, database tables, projections or workflow endpoints exist, and, per the [verification status](#development-environment-evf-21), the owner's existing PostgreSQL passed an owner-run check, Visual Studio was owner-reported healthy, VS Code launch is not independently verified and CI has not yet run for EVF-21. Everything under [Why EventForge?](#why-eventforge), [Architecture](#architecture) (planned runtime and lifecycle) and [Roadmap](#roadmap) describes intended design, not delivered functionality.
+> The repository contains a verified .NET 10 solution, a minimal ASP.NET Core host, Clean Architecture project scaffolding, validated dependency injection, automated architecture dependency tests, a working GitHub Actions baseline CI pipeline and (EVF-21) PostgreSQL connectivity code, native launch configuration, optional Docker files and provisioning SQL. **EventForge is not yet a working workflow engine:** no domain behavior, projections or workflow endpoints exist; the PostgreSQL event store (EVF-22) is written, builds and passes its non-database tests, but its migration and PostgreSQL integration tests **have not been executed yet**. Per the [verification status](#development-environment-evf-21), the owner's existing PostgreSQL passed an owner-run check, Visual Studio was owner-reported healthy and VS Code launch is not independently verified. Everything under [Why EventForge?](#why-eventforge), [Architecture](#architecture) (planned runtime and lifecycle) and [Roadmap](#roadmap) describes intended design, not delivered functionality.
 
 ## Engineering highlights
 
-- **Verified baseline:** .NET 10 SDK pinned by `global.json`; Release build with 0 warnings and 0 errors; 33 passing tests confirmed in GitHub Actions at the EVF-5 baseline (see [Continuous integration](#continuous-integration)) and 42 passing tests in a reported local run after EVF-21 (not CI evidence; CI has not yet executed for EVF-21).
+- **Verified baseline:** .NET 10 SDK pinned by `global.json`; Release build with 0 warnings and 0 errors; 33 passing tests confirmed in GitHub Actions at the EVF-5 baseline (see [Continuous integration](#continuous-integration)) and, after EVF-21, a verified `main` CI run with 42 passing tests, 0 failures, 0 skipped and 0 build warnings or errors.
 - **Architecture enforced by tests:** project references and namespace dependencies are checked from the real `.csproj` files and Roslyn semantic analysis, including fixtures that prove forbidden dependencies are rejected.
 - **Clean Architecture from the first commit:** Workflow owns the domain; HTTP, persistence and simulation are adapters that depend inward.
 - **Fail-closed validation:** built-in DI with `ValidateOnBuild` and `ValidateScopes`; static analysis reports `analysis-incomplete` rather than silently passing.
@@ -39,6 +39,7 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | `Dockerfile`, `.dockerignore`, `compose.yaml`, `.env.example` (EVF-21) | Implemented; image built, stack started, `/health` 200 and `docker compose down` verified locally (not CI) |
 | `db/provisioning/001-provision.sql` role/database/schema provisioning (EVF-21) | Implemented; executed once on a fresh isolated Compose volume (roles, database, schema and privileges checked); never run against any existing server |
 | Architecture checker resolves the approved Npgsql package (EVF-21) | Implemented and verified by tests; see [Automated architecture validation](#automated-architecture-validation) |
+| Event Store (EVF-22): Application contracts `IEventStore`, `StreamKey`, `NewEvent`, `StoredEvent`, `LoadedStream`, `AppendResult`; `PostgreSqlEventStore` in Infrastructure; migration `db/migrations/001-create-event-store.sql`; `tests/EventForge.IntegrationTests`; CI job `postgres-integration` | Source builds with 0 warnings and 0 errors, and the architecture and contract tests pass locally (non-database). **Not verified:** the migration, the PostgreSQL integration tests (no test has run against PostgreSQL) and the new CI job. Not wired into the API; no domain events exist. See [docs/development.md](docs/development.md#event-store-migration-evf-22) |
 | Engineering governance documents ([AGENTS.md](AGENTS.md), PR and commit templates) | Documented; enforcement is partial (see [governance](#ai-assisted-engineering-and-governance)) |
 
 ### Planned, not implemented
@@ -273,11 +274,11 @@ Details, commands and limits are in [docs/development.md](docs/development.md). 
 | Mode 1: Visual Studio native API launch, `/health` | **Healthy** (owner-reported) |
 | Mode 1: Visual Studio Code native launch | **Not independently verified** |
 | Provisioning script re-execution (second run on an existing volume) | **Not validated** |
-| Pull-request CI for EVF-21 | **Not yet executed**; the workflow is unchanged, builds no containers and has no PostgreSQL gate |
+| CI for EVF-21 | **Verified** on `main`: 42 tests passed, 0 failed, 0 skipped, 0 build warnings and 0 errors. The workflow builds no containers; the PostgreSQL gate is added by EVF-22 and is unverified |
 
 Local verification used a throwaway, git-ignored `.env` and a Compose volume; both are intentionally preserved and nothing removes them automatically. In the Docker runtime image the API prints a nonfatal `libgssapi_krb5.so.2` warning (Npgsql probing for Kerberos); and because the official PostgreSQL image trusts loopback connections inside the container, an in-container `127.0.0.1` test is not proof of password authentication. See [docs/development.md](docs/development.md).
 
-Security limits: credentials are protected only by user secrets or environment variables (not encrypted at rest); the Compose stack is for local use (loopback, no TLS, passwords in container environment); role separation is provisioned but table-level least-privilege grants, append-only enforcement and operator rights do not exist until the tables do. These are limitations, not delivered safeguards.
+Security limits: credentials are protected only by user secrets or environment variables (not encrypted at rest); the Compose stack is for local use (loopback, no TLS, passwords in container environment); role separation is provisioned but table-level grants exist only in the not-yet-executed EVF-22 migration (runtime role: `SELECT` and `INSERT` on `eventforge.events`), and operator rights do not exist yet. These are limitations, not delivered safeguards.
 
 ## Continuous integration
 
@@ -295,7 +296,9 @@ flowchart LR
     Test -. "test failure" .-> Fail
 ```
 
-Build and test failures fail the job. The TRX results are uploaded as the `test-results-trx` artifact, also when tests fail.
+Build and test failures fail the job. The TRX results are uploaded as the `test-results-trx` artifact, also when tests fail. This job runs every test except those in the `PostgreSql` category.
+
+EVF-22 adds a second job, `postgres-integration` (**not yet executed**): it starts an ephemeral `postgres:17` service on the runner with a throwaway password, runs only the `PostgreSql`-category tests and then fails unless the TRX shows tests were executed, all passed and none were skipped. See [docs/development.md](docs/development.md#event-store-migration-evf-22).
 
 ### Verified baseline results (November 19, 2026)
 
@@ -352,7 +355,7 @@ The EVF-5 baseline CI implementation and verification are **complete**: the work
 
 **Fixture coverage:** synthetic sources (compiled in an isolated context, never added to the production projects) run through the same checker. One valid layout and one valid nested-namespace layout are accepted; 24 forbidden scenarios are each rejected for the intended rule on exactly the marked lines (Domain to Application, HTTP, SQL, Npgsql (including `using Npgsql` and `NpgsqlDataSource`), Entity Framework, Infrastructure and Simulation; Application to API and to Npgsql; Simulation to Npgsql; Infrastructure and Simulation to each other; alias, fully qualified, unqualified and implicit-using references; references in fields, parameters, return types, base types, generic arguments and member access; namespace mismatch; unresolved symbol; Workflow root files declaring Domain or Application namespaces; API declaring a Workflow namespace). One valid fixture shows Infrastructure code using `NpgsqlDataSource` accepted without analysis errors, and one shows a type from an unapproved package (`Dapper`) still rejected as `analysis-incomplete`. Project-reference fixtures cover an outward dependency, a circular dependency, a production-to-test reference, a missing reference, an unresolved reference and a conditional reference.
 
-**Current absence of domain code:** at the time of EVF-16 the production scan analyzed 1 file (`EventForge.Api/Program.cs`, no types) and **0 files and 0 types** in Workflow, Domain, Application, Infrastructure and Simulation. Since EVF-21, Infrastructure contains the PostgreSQL connectivity types (analyzed with the real Npgsql metadata), while Workflow, Domain, Application and Simulation remain empty. The production namespace test therefore still proves nothing about domain isolation; the fixtures demonstrate that the checker works, and the production check becomes meaningful as types are added.
+**Current absence of domain code:** at the time of EVF-16 the production scan analyzed 1 file (`EventForge.Api/Program.cs`, no types) and **0 files and 0 types** in Workflow, Domain, Application, Infrastructure and Simulation. Since EVF-21, Infrastructure contains the PostgreSQL connectivity types (analyzed with the real Npgsql metadata), and since EVF-22 it also holds the event store adapter while Workflow/Application holds the Event Store contracts; Domain and Simulation remain empty. The production namespace test therefore still proves nothing about domain isolation; the fixtures demonstrate that the checker works, and the production check becomes meaningful as types are added.
 
 **Limitations:** static analysis only. It does not evaluate MSBuild (conditions, imports and `Directory.Build.props` are not expanded; a conditional `ProjectReference` or an `Import` in a project file is reported rather than followed), does not inspect `PackageReference` items (apart from the Npgsql placement and version test above), does not detect reflection, dynamically loaded assemblies or runtime behavior, and does not cover every framework namespace. The checker assumes `ImplicitUsings` as enabled by the SDK. All source files are analyzed in one combined Roslyn compilation that references the .NET framework assemblies and the single approved Npgsql assembly: no other NuGet package or project references are loaded, so a type from any other package is an unresolved symbol (reported as `analysis-incomplete` in rule-scoped layers, never as a pass), the same simple type name in different layers is not isolated per project, and API files are only checked for namespace ownership, not dependencies. The CI workflow runs these tests as part of the xUnit suite, but they do not replace human review.
 
@@ -379,7 +382,7 @@ The 12 roadmap tasks, milestones and MVP acceptance criteria are preserved in [d
 | --- | --- | --- |
 | 1 | Solution and architecture setup | Completed (EVF-13) |
 | 2 | PostgreSQL and Docker configuration | Partially implemented (EVF-21; VS Code launch, provisioning re-run and PR CI not yet verified) |
-| 3 | Event Store implementation | Planned |
+| 3 | Event Store implementation | Partially implemented (EVF-22; migration, PostgreSQL integration tests and CI gate not yet executed) |
 | 4 | Domain aggregates and event persistence | Planned |
 | 5 | CQRS commands and queries | Planned |
 | 6 | Transactional projections | Planned |

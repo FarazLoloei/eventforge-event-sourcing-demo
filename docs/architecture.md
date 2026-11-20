@@ -183,7 +183,17 @@ The stable `eventType` and numeric `schemaVersion` identify a logical event cont
 | `metadata JSONB` | Causation/correlation information and actor type. |
 | `recorded_at TIMESTAMPTZ` | Server-assigned or explicitly persisted recording time. |
 
-**Required constraints:** primary key on `event_id`; unique constraint on `(stream_type, stream_id, stream_version)`; supporting index for loading one ordered stream. A JSONB payload is flexible but does **not** replace explicit contract validation and versioned deserialization.
+**Required constraints:** primary key on `event_id`; unique constraint on `(stream_type, stream_id, stream_version)`, whose underlying index also serves ordered loading of one stream (no separate index is added unless measurements show a need). A JSONB payload is flexible but does **not** replace explicit contract validation and versioned deserialization.
+
+### EVF-22 implementation notes (written, not yet run against PostgreSQL)
+
+The Application layer owns `IEventStore` (`LoadStreamAsync`, `AppendAsync`) and the contracts `StreamKey`, `NewEvent`, `StoredEvent`, `LoadedStream` and `AppendResult` (`Workflow/Application/EventStore`). `PostgreSqlEventStore` in Infrastructure implements them over `eventforge.events`, created by `db/migrations/001-create-event-store.sql`. Constraint names: `events_pkey`, `events_stream_version_uq`; `CHECK`s require positive versions, stream/event names matching `^[A-Za-z][A-Za-z0-9._-]{0,99}$` and JSON-object payload and metadata. `recorded_at` is the PostgreSQL transaction timestamp, returned in the persisted envelope (one value per append batch).
+
+- **Append** runs in one `READ COMMITTED` transaction: read `count(*)` and `max(stream_version)` for the stream; `count <> max` means a gap, so it throws `EventStreamCorruptedException` instead of extending the stream; `max <> expectedVersion` returns `VersionConflict` with the observed version; otherwise insert the batch and commit. Success is reported only after commit.
+- **Racing writers** that both pass the check are separated by the unique constraint: the loser's violation of `events_stream_version_uq` becomes `VersionConflict` with `CurrentVersion = null` (the winner's version is deliberately not re-read; reload to learn it). A violation of `events_pkey` becomes `DuplicateEventId`; the whole batch is rolled back. No advisory locks, no retries.
+- **Unknown commit:** a connection failure or cancellation while committing throws `EventStoreCommitUnknownException`; the caller must reload the stream. Failures before commit are definite rollbacks.
+- **Load** validates that versions are exactly `1..n`. Upcasting is not implemented (Task 8). JSONB normalises key order and whitespace, so a loaded payload is structurally, not textually, equal to the submitted one.
+- The append logic is a separate internal method taking a connection and transaction so that a later task can run it in a transaction shared with an inline projector; that shared-transaction contract is Task 6 and is not designed here.
 
 ### Expected-version semantics
 

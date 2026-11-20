@@ -6,6 +6,7 @@
     <Project Path="src/EventForge.Workflow/EventForge.Workflow.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/EventForge.IntegrationTests/EventForge.IntegrationTests.csproj" />
     <Project Path="tests/EventForge.UnitTests/EventForge.UnitTests.csproj" />
   </Folder>
 </Solution>

@@ -2,7 +2,7 @@
 
 How to run EventForge in the two supported modes (native development, and a Docker Compose evaluation stack), and how PostgreSQL is configured and provisioned. For what is implemented and verified, see the [README status tables](../README.md#current-implementation); this guide adds no architectural decisions (the Npgsql decision is recorded in [ADR 0001](adr/0001-architecture.md#decision-history)).
 
-> **Status:** PostgreSQL connectivity code, native launch configuration, Docker files and provisioning SQL exist. Mode 2 and the native check against the Compose PostgreSQL were run successfully in an isolated stack (author-reported, not CI). Mode 1: the runtime-role check against the owner's existing PostgreSQL 17.11 on `127.0.0.1:5434` passed (owner-run) and a Visual Studio launch reported `/health` Healthy (owner-reported); the VS Code launch is **not independently verified**, and pull-request CI has **not yet executed** for EVF-21. **No database schema, event store or workflow behavior exists.**
+> **Status:** PostgreSQL connectivity code, native launch configuration, Docker files and provisioning SQL exist. Mode 2 and the native check against the Compose PostgreSQL were run successfully in an isolated stack (author-reported, not CI). Mode 1: the runtime-role check against the owner's existing PostgreSQL 17.11 on `127.0.0.1:5434` passed (owner-run) and a Visual Studio launch reported `/health` Healthy (owner-reported); the VS Code launch is **not independently verified**. CI for EVF-21 is verified (`main` run: 42 tests passed, 0 failed, 0 skipped, 0 build warnings or errors). EVF-22 adds an event store migration and PostgreSQL integration tests that have **not been executed**; no workflow behavior exists, and the API does not use the event store.
 
 ## Execution modes
 
@@ -183,7 +183,7 @@ Provisioning runs only against an empty data directory; changing a password in `
 | Database | `eventforge` | `PUBLIC` access revoked |
 | Schema | `eventforge` | Owned by the migrator; `PUBLIC` access revoked |
 
-All roles are `LOGIN` without `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS` and are members of no other role. The script ends with checks that fail the run if existing roles or the schema owner contradict this. It creates **no tables, grants no table privileges and runs no migrations**; the API never runs migrations at startup. Table-level grants (event append-only access, projection access, operator replay rights) will be added with the migrations that create the tables.
+All roles are `LOGIN` without `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS` and are members of no other role. The script ends with checks that fail the run if existing roles or the schema owner contradict this. It creates **no tables, grants no table privileges and runs no migrations**; the API never runs migrations at startup. Table-level grants are added with the migrations that create the tables: EVF-22 grants the runtime role `SELECT` and `INSERT` on `eventforge.events` (see [Event Store migration](#event-store-migration-evf-22)); projection access and operator replay rights come later.
 
 Manual run against a fresh server (passwords from the environment, never from the file):
 
@@ -196,11 +196,51 @@ psql -h <host> -p <port> -U <admin role> -d postgres -v ON_ERROR_STOP=1 -f db/pr
 
 The Compose `postgres` service runs the same file automatically on first start. It was executed once, by the Compose first start, on a fresh empty volume (PostgreSQL 17.12): all three roles, the database and the schema were created without errors and the catalog matched the model above. A second execution (re-run on an existing volume) has not been performed. It has never been run against any existing server, including the owner's server on port 5434, and must not be without review.
 
+## Event Store migration (EVF-22)
+
+> **Status: written, not executed.** The migration and the PostgreSQL integration tests have not been run against any database. Nothing below has been verified.
+
+`db/migrations/001-create-event-store.sql` creates `eventforge.events` (columns, `events_pkey`, `events_stream_version_uq` and the `CHECK` constraints are described in [architecture.md](architecture.md#4-event-store-design-postgresql)) and grants the runtime role `eventforge_app` only `SELECT` and `INSERT`. Migrations are run explicitly by the owner and never by the API.
+
+```powershell
+# Prerequisite: the provisioning script has run. Prompts for the eventforge_migrator password.
+psql -h <host> -p <port> -U eventforge_migrator -d eventforge -v ON_ERROR_STOP=1 -f db/migrations/001-create-event-store.sql
+```
+
+- **Transactional and re-runnable.** The file runs in one transaction. On a first run it creates the table. On a later run it creates nothing, compares the existing table's columns and constraint definitions with a temporary table built from the same DDL, checks ownership, and re-asserts and verifies the runtime role's privileges (no `UPDATE`, `DELETE`, `TRUNCATE`, schema `CREATE`). Any mismatch raises an error and rolls everything back; drift is never ignored or repaired.
+- **No rollback script.** The migration never drops or alters existing objects. To discard a disposable environment, drop that environment.
+- **Not covered:** the operator role is untouched; there is no migration history table; the check compares columns and constraints but not extra indexes, triggers or table options.
+
+### Integration tests (isolated PostgreSQL only)
+
+`tests/EventForge.IntegrationTests` contains contract/argument/guard tests that never connect (they run in the normal `dotnet test`) and `PostgreSql`-category tests (store behaviour, migration re-run and drift, runtime privileges). The PostgreSQL tests are **skipped unless explicitly enabled**, and the fixture creates and drops its own roles (`eventforge_migrator`, `eventforge_app`) and a throwaway database, so they must only ever target a dedicated, disposable PostgreSQL 17:
+
+| Variable | Value |
+| --- | --- |
+| `EVENTFORGE_IT_ENABLED` | `disposable-postgres` |
+| `EVENTFORGE_IT_ADMIN_CONNECTION` | Npgsql connection string of a superuser on that server (maintenance database) |
+
+A guard refuses to run when the host is not loopback, the port is 5434 or 5535, the database or user name starts with `eventforge`, the server is not PostgreSQL 17, or the server already has any `eventforge*` database or role. **The guard is a safety net, not proof that a server is disposable**: never point the variables at the owner's PostgreSQL (`127.0.0.1:5434`), the preserved Compose database (`127.0.0.1:5535`) or any shared server. Example for the owner, with a new, empty container on another port (not run by the author):
+
+```powershell
+docker run --rm -d --name eventforge-it -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=<throwaway> postgres:17
+$env:EVENTFORGE_IT_ENABLED = "disposable-postgres"
+$env:EVENTFORGE_IT_ADMIN_CONNECTION = "Host=127.0.0.1;Port=55432;Database=postgres;Username=postgres;Password=<throwaway>"
+dotnet test tests/EventForge.IntegrationTests --filter "Category=PostgreSql"
+docker stop eventforge-it
+```
+
+In CI the `postgres-integration` job does the same with an ephemeral service container and fails unless PostgreSQL tests executed, all passed and none were skipped.
+
+### Known limitations
+
+`CurrentVersion` is `null` for race-based conflicts and duplicate ids (callers reload). The gap check on append compares `count(*)` with `max(stream_version)`. `recorded_at` is one value per append batch. JSONB normalises payload formatting. A commit whose outcome is unknown throws and requires a reload; there is no request idempotency. Versions are 32-bit. Database errors other than the two mapped unique violations propagate as `PostgresException`; its `Detail` (for example on a check violation) can contain row data, so callers must not log whole exceptions, and a payload containing `\u0000` is rejected by JSONB. The drift check does not compare column order. The CI service image `postgres:17` is a floating tag, not digest-pinned. The migration is sent through Npgsql as a single multi-statement command by the tests; that path is as unverified as the rest.
+
 ## Verification
 
 ### Reported local verification (not CI evidence)
 
-Reported local verification on the author's Windows machine with Docker Desktop (PostgreSQL 17.12 image, .NET SDK 10.0.404), run on November 19-20, 2026. This is **not CI evidence**: the GitHub Actions workflow was not changed, builds no containers and has not been re-run for EVF-21.
+Reported local verification on the author's Windows machine with Docker Desktop (PostgreSQL 17.12 image, .NET SDK 10.0.404), run on November 19-20, 2026. This is **not CI evidence**; the GitHub Actions workflow builds no containers (CI for EVF-21 separately passed on `main`: 42 tests, 0 failed, 0 skipped, 0 warnings, 0 errors).
 
 | Check | Result |
 | --- | --- |
@@ -227,7 +267,7 @@ Reported local verification on the author's Windows machine with Docker Desktop 
 | Visual Studio native API launch, `/health` | **Healthy** (owner-reported) |
 | Visual Studio Code native launch | **Not independently verified** |
 | Provisioning script re-execution | **Not validated** (see [Database provisioning](#database-provisioning)) |
-| Pull-request CI for EVF-21 | **Not yet executed** |
+| CI for EVF-21 | **Verified** on `main` (42 passed, 0 failed, 0 skipped; 0 build warnings and errors) |
 
 ### Owner-run checklist for the remaining check
 
