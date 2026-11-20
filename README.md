@@ -30,8 +30,7 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | .NET 10 solution (`EventForge.slnx`) and SDK pin (`global.json`) | Implemented |
 | Minimal ASP.NET Core host (`src/EventForge.Api`) | Implemented |
 | `/health` endpoint (process liveness only; no database or dependency checks) | Implemented |
-| Clean Architecture project scaffolding (`Workflow`, `Infrastructure`, `Simulation`) with the project references below | Implemented (`Simulation` is empty; `Workflow` and `Infrastructure` contain only the types listed in this table) |
-| Task domain contracts (EVF-28): strongly typed identifiers (`TaskId`, `AgentId`, `GenerationId`, `ArtifactRef`), initial `TaskState`, six commands, the six approved event definitions with `TaskEventContract` (stream type `Task`, schema version 1), and `Decision`/`RejectionCode` result types in `EventForge.Workflow.Domain`; focused contract tests in `tests/EventForge.UnitTests/Domain` | Implemented as contracts only. They contain no workflow behavior: `Decide`/`Apply`, event serialization and Event Store mapping, REST API, projections and replay are **not implemented** (see below) |
+| Clean Architecture project scaffolding (`Workflow`, `Infrastructure`, `Simulation`) with the project references below | Implemented (empty; no production types) |
 | Native DI with `ValidateOnBuild` and `ValidateScopes` (EVF-17) | Implemented; only health checks are explicitly registered |
 | xUnit project with Roslyn-based architecture dependency tests (EVF-16) | Implemented; limited to the checks in [Automated architecture validation](#automated-architecture-validation) |
 | GitHub Actions baseline CI with TRX test-result artifacts (EVF-5) | Implemented and verified, including controlled failure and recovery; see [Continuous integration](#continuous-integration) |
@@ -48,8 +47,7 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | Area | Status |
 | --- | --- |
 | Projection tables and further migrations | Planned (Task 6; the API never runs migrations at startup). The event store table migration (EVF-22) is implemented, see above |
-| Task aggregate behavior: pure `Decide`/`Apply`, invariant enforcement, history validation and comprehensive domain tests | Planned (EVF-29); only the Domain contracts exist (EVF-28) |
-| Event serialization, mapping to the Event Store envelope and Event Store integration for Task events | Planned (EVF-30) |
+| Domain aggregates and workflow behavior | Planned |
 | CQRS command/query handlers and REST workflow endpoints | Planned |
 | Mapping stale expected versions to API responses (HTTP 409) | Planned (Task 5); expected-version concurrency in the event store is implemented (EVF-22) |
 | Transactional inline projections | Planned |
@@ -79,26 +77,22 @@ Guiding principle: events are authoritative; projections are disposable.
 
 ### Implemented project dependencies
 
-These are the actual direct project references; the architecture tests enforce the production matrix in the table below (test projects may reference production projects, but production projects must not reference test projects). Solid arrows are project references and the dotted arrow is not. Arrows point from the referencing project to the referenced project.
+These are the actual direct project references, enforced by the architecture tests. Arrows point from the referencing project to the referenced project.
 
 ```mermaid
 flowchart TB
     Api["EventForge.Api<br/>composition root, /health"]
-    Infra["EventForge.Infrastructure<br/>PostgreSQL connectivity and Event Store adapter (Npgsql)"]
+    Infra["EventForge.Infrastructure<br/>PostgreSQL connectivity (Npgsql)"]
     Sim["EventForge.Simulation<br/>(empty scaffolding)"]
-    Workflow["EventForge.Workflow<br/>Domain and Application folders<br/>(one assembly; Domain contracts and Event Store contracts)"]
-    UnitTests["EventForge.UnitTests<br/>architecture and Domain contract tests"]
-    IntegrationTests["EventForge.IntegrationTests<br/>Event Store tests (PostgreSQL)"]
+    Workflow["EventForge.Workflow<br/>Domain and Application folders<br/>(one assembly, no production types)"]
+    Tests["EventForge.UnitTests<br/>(no production references)"]
 
     Api --> Workflow
     Api --> Infra
     Api --> Sim
     Infra --> Workflow
     Sim --> Workflow
-    UnitTests --> Workflow
-    IntegrationTests --> Workflow
-    IntegrationTests --> Infra
-    UnitTests -. "architecture tests read repository files at run time" .-> Api
+    Tests -. "reads repository files at run time" .-> Api
 ```
 
 | Project | Direct project references |
@@ -108,9 +102,9 @@ flowchart TB
 | EventForge.Simulation | Workflow |
 | EventForge.Workflow | None |
 
-The only third-party production package is **Npgsql 10.0.3**, referenced by `EventForge.Infrastructure` alone (a test enforces that no other production project references it). `tests/EventForge.UnitTests` additionally holds a metadata-only `PackageReference` to the same Npgsql version so the architecture checker can resolve Npgsql symbols; it is never used in code, and a test keeps its version equal to the Infrastructure reference. This is not a production dependency. Domain currently holds only the contract types from EVF-28 (no behavior); Application holds the Event Store contracts from EVF-22.
+The only third-party package is **Npgsql 10.0.3**, referenced by `EventForge.Infrastructure` alone (a test enforces this). Domain and Application contain no production types.
 
-Domain and Application currently share the single `EventForge.Workflow` assembly, separated by folder and namespace. Further internal dependencies (for example Application depending inward on Domain, or Infrastructure implementing Application-owned ports) are **intended rules, not existing code**. The dotted test edge is not a project reference.
+Domain and Application currently share the single `EventForge.Workflow` assembly, separated by folder and namespace, and contain no production types. Further internal dependencies (for example Application depending inward on Domain, or Infrastructure implementing Application-owned ports) are **intended rules, not existing code**. The dotted test edge is not a project reference.
 
 ### Planned runtime architecture
 
@@ -146,7 +140,7 @@ Planned design guarantees (see [the architecture document](docs/architecture.md)
 
 ### Planned task lifecycle
 
-> **Planned, not implemented.** Only the Domain contracts exist (EVF-28); `Decide`/`Apply` do not, so none of these rules is enforced by code yet. Assignment precedes generation. Tests refer to the current generation, and a new generation invalidates the previous test outcome. Commands that violate a rule are rejected and append nothing.
+> **Planned, not implemented.** Assignment precedes generation. Tests refer to the current generation, and a new generation invalidates the previous test outcome. Commands that violate a rule are rejected and append nothing.
 
 ```mermaid
 stateDiagram-v2
@@ -189,11 +183,11 @@ Events are immutable, versioned facts. Examples and artifact references are synt
 | --- | --- | --- |
 | Language / runtime | C# / .NET 10 (SDK 10.0.404 pinned) | In use |
 | HTTP | ASP.NET Core | In use (health endpoint only) |
-| Tests | xUnit, Roslyn (architecture tests); Domain contract tests (EVF-28); PostgreSQL Event Store integration tests (EVF-22) | In use; no tests of aggregate behavior yet |
+| Tests | xUnit, Roslyn (architecture tests) | In use |
 | Continuous integration | GitHub Actions | In use (baseline) |
 | Architecture style | Modular Monolith, DDD, Event Sourcing, CQRS, Clean Architecture | Structure in place; behavior planned |
 | Primary data store | PostgreSQL 17 (including JSONB event payloads) | Connectivity code and the event store table and adapter (EVF-22); no projection tables yet |
-| Database access | Npgsql 10.0.3, direct parameterized SQL, no ORM | In use (connectivity verification and the Event Store adapter, EVF-22) |
+| Database access | Npgsql 10.0.3, direct parameterized SQL, no ORM | In use (connectivity verification only) |
 | Optional local environment | Docker Compose (PostgreSQL 17, API container) | Verified locally in an isolated stack (not CI) |
 
 ## Repository structure
@@ -202,13 +196,12 @@ Events are immutable, versioned facts. Examples and artifact references are synt
 src/
   EventForge.Api/             # Only executable; composition root; /health
   EventForge.Workflow/        # Task Workflow bounded context (one assembly)
-    Domain/                   # EventForge.Workflow.Domain (EVF-28 contracts only; no Decide/Apply)
-    Application/              # EventForge.Workflow.Application (Event Store contracts, EVF-22)
-  EventForge.Infrastructure/  # PostgreSQL connectivity and Event Store adapter (Npgsql); future projection adapters
+    Domain/                   # EventForge.Workflow.Domain (README only)
+    Application/              # EventForge.Workflow.Application (README only)
+  EventForge.Infrastructure/  # PostgreSQL connectivity (Npgsql); future persistence adapters
   EventForge.Simulation/      # Future synthetic agent/test-outcome adapters
 tests/
-  EventForge.UnitTests/       # xUnit; architecture dependency tests and Domain contract tests (references Workflow)
-  EventForge.IntegrationTests/ # xUnit; Event Store tests, PostgreSQL category (EVF-22; references Workflow and Infrastructure)
+  EventForge.UnitTests/       # xUnit; architecture dependency tests only (no production references)
 docs/                         # Architecture, roadmap, ADR 0001, development guide
 db/provisioning/              # Fresh-environment role/database/schema SQL (run once on an isolated volume)
 Dockerfile, compose.yaml      # Optional Docker support (.dockerignore, .env.example)
@@ -345,23 +338,23 @@ The temporary failing test was removed before the end of the review. PR #13 was 
 The EVF-5 baseline CI implementation and verification are **complete**: the workflow is operational, and successful, failing and recovery runs were verified. Not part of the baseline, and not implemented:
 
 - Required status checks and branch protection. None are configured; they require separate project-owner approval and are outside EVF-5 scope.
-- Event-contract and upcaster compatibility checks, aggregate (`Decide`/`Apply`) tests, projection and replay/projection-diff verification; these quality gates will be added with the capabilities they verify. The PostgreSQL Event Store integration tests and their CI job (`postgres-integration`) were added by EVF-22 and are not part of the EVF-5 baseline.
+- PostgreSQL integration tests, event-contract and upcaster compatibility checks, optimistic-concurrency tests and replay/projection-diff verification; these quality gates will be added with the capabilities they verify.
 - CD and deployment.
 
 ## Automated architecture validation
 
-`tests/EventForge.UnitTests` holds the architecture tests; `tests/EventForge.IntegrationTests` (Event Store tests, EVF-22) is outside this section. The architecture tests read the repository's own files at run time and do not use Graphify; since EVF-28 the project also references `EventForge.Workflow` for the Domain contract tests (`Domain/DomainContractTests.cs`). One shared checker, `ArchitectureRuleChecker`, serves both the production tests and the fixtures.
+`tests/EventForge.UnitTests` holds the only test project. Its tests read the repository's own files at run time; they reference no production project and do not use Graphify. One shared checker, `ArchitectureRuleChecker`, serves both the production tests and the fixtures.
 
 **Implemented checks**
 
 - **Project references:** the actual `.csproj` files, parsed as XML, must match the approved matrix above exactly. Unexpected or missing references, circular references, production references to test projects, unresolved projects and unsupported MSBuild constructs are reported.
 - **Namespace dependencies:** Roslyn syntax trees and semantic models over `src/**/*.cs` (excluding `bin`, `obj` and generated files), resolved against the .NET framework assemblies. Domain must not depend on Application, API, Infrastructure, Simulation, `Microsoft.AspNetCore`, `System.Net.Http`, `System.Data`, Npgsql, Entity Framework Core or common SQL client namespaces. Application must not depend on API, Infrastructure, Simulation or Npgsql. Infrastructure and Simulation must not depend on each other or on the API, and Simulation must not depend on Npgsql: Npgsql is permitted only in Infrastructure. Folder-to-namespace ownership is checked using the fully resolved namespace of each top-level type (nested namespace blocks are accepted). Hand-written Workflow source outside `Workflow/Domain/` and `Workflow/Application/` is rejected, and API files may not declare Workflow, Infrastructure or Simulation namespaces. Violations report file, line, source namespace, target and rule.
 - **Fail-closed analysis:** a compilation error in a rule-scoped file is reported as `analysis-incomplete` rather than silently passing.
-- **Approved package metadata (EVF-21):** besides the framework, the checker loads exactly one explicitly approved package assembly, `Npgsql.dll`, from the test output folder (placed there by the test project's `PackageReference`). It throws if the file is missing or is not Npgsql 10.x, so a missing reference can never silently pass. The `PackageReference` that places `Npgsql.dll` there is metadata-only in the UnitTests project (never used in code, not a production dependency). A test asserts that the checker's Npgsql version equals the one in `EventForge.Infrastructure.csproj` and that no other production project references Npgsql. Unresolved symbols are still never suppressed: a type from any other package remains `analysis-incomplete`.
+- **Approved package metadata (EVF-21):** besides the framework, the checker loads exactly one explicitly approved package assembly, `Npgsql.dll`, from the test output folder (placed there by the test project's `PackageReference`). It throws if the file is missing or is not Npgsql 10.x, so a missing reference can never silently pass. A test asserts that the checker's Npgsql version equals the one in `EventForge.Infrastructure.csproj` and that no other production project references Npgsql. Unresolved symbols are still never suppressed: a type from any other package remains `analysis-incomplete`.
 
 **Fixture coverage:** synthetic sources (compiled in an isolated context, never added to the production projects) run through the same checker. One valid layout and one valid nested-namespace layout are accepted; 24 forbidden scenarios are each rejected for the intended rule on exactly the marked lines (Domain to Application, HTTP, SQL, Npgsql (including `using Npgsql` and `NpgsqlDataSource`), Entity Framework, Infrastructure and Simulation; Application to API and to Npgsql; Simulation to Npgsql; Infrastructure and Simulation to each other; alias, fully qualified, unqualified and implicit-using references; references in fields, parameters, return types, base types, generic arguments and member access; namespace mismatch; unresolved symbol; Workflow root files declaring Domain or Application namespaces; API declaring a Workflow namespace). One valid fixture shows Infrastructure code using `NpgsqlDataSource` accepted without analysis errors, and one shows a type from an unapproved package (`Dapper`) still rejected as `analysis-incomplete`. Project-reference fixtures cover an outward dependency, a circular dependency, a production-to-test reference, a missing reference, an unresolved reference and a conditional reference.
 
-**Current absence of domain code:** at the time of EVF-16 the production scan analyzed 1 file (`EventForge.Api/Program.cs`, no types) and **0 files and 0 types** in Workflow, Domain, Application, Infrastructure and Simulation. Since EVF-21, Infrastructure contains the PostgreSQL connectivity types (analyzed with the real Npgsql metadata), and since EVF-22 it also holds the event store adapter while Workflow/Application holds the Event Store contracts; since EVF-28 Domain holds the Task contract types (no behavior); only Simulation remains empty. The production namespace test therefore now scans Domain, Application and Infrastructure sources, while the fixtures demonstrate that the checker rejects forbidden dependencies. Domain isolation is still only as meaningful as the small amount of Domain code that exists.
+**Current absence of domain code:** at the time of EVF-16 the production scan analyzed 1 file (`EventForge.Api/Program.cs`, no types) and **0 files and 0 types** in Workflow, Domain, Application, Infrastructure and Simulation. Since EVF-21, Infrastructure contains the PostgreSQL connectivity types (analyzed with the real Npgsql metadata), and since EVF-22 it also holds the event store adapter while Workflow/Application holds the Event Store contracts; Domain and Simulation remain empty. The production namespace test therefore still proves nothing about domain isolation; the fixtures demonstrate that the checker works, and the production check becomes meaningful as types are added.
 
 **Limitations:** static analysis only. It does not evaluate MSBuild (conditions, imports and `Directory.Build.props` are not expanded; a conditional `ProjectReference` or an `Import` in a project file is reported rather than followed), does not inspect `PackageReference` items (apart from the Npgsql placement and version test above), does not detect reflection, dynamically loaded assemblies or runtime behavior, and does not cover every framework namespace. The checker assumes `ImplicitUsings` as enabled by the SDK. All source files are analyzed in one combined Roslyn compilation that references the .NET framework assemblies and the single approved Npgsql assembly: no other NuGet package or project references are loaded, so a type from any other package is an unresolved symbol (reported as `analysis-incomplete` in rule-scoped layers, never as a pass), the same simple type name in different layers is not isolated per project, and API files are only checked for namespace ownership, not dependencies. The CI workflow runs these tests as part of the xUnit suite, but they do not replace human review.
 
@@ -389,7 +382,7 @@ The 12 roadmap tasks, milestones and MVP acceptance criteria are preserved in [d
 | 1 | Solution and architecture setup | Completed (EVF-13) |
 | 2 | PostgreSQL and Docker configuration | Partially implemented (EVF-21; VS Code launch, provisioning re-run and PR CI not yet verified) |
 | 3 | Event Store implementation | Implemented and verified (EVF-22, [PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)) |
-| 4 | Domain aggregates and event persistence | In progress: Domain contracts implemented (EVF-28); aggregate behavior (EVF-29) and event persistence mapping (EVF-30) planned |
+| 4 | Domain aggregates and event persistence | Planned |
 | 5 | CQRS commands and queries | Planned |
 | 6 | Transactional projections | Planned |
 | 7 | Event replay and projection rebuilding | Planned |
