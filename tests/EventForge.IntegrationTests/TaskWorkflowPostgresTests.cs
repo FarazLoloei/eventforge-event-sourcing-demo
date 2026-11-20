@@ -120,6 +120,103 @@ public sealed class TaskWorkflowPostgresTests(PostgresFixture fixture) : IAsyncL
     }
 
     [PostgresFact]
+    public async Task Recovery_after_a_failed_generation_completes_only_once_the_new_generation_passes()
+    {
+        var task = NewTask();
+        var handler = NewHandler();
+        var agent = new AgentId("agent-1");
+        var g1 = new GenerationId("g1");
+        var g2 = new GenerationId("g2");
+
+        Assert.IsType<CommandSucceeded>(await Run(handler, new CreateTask(task), 0));
+        Assert.IsType<CommandSucceeded>(await Run(handler, new AssignTask(task, agent), 1));
+        Assert.IsType<CommandSucceeded>(await Run(handler, new RecordCodeGenerated(task, g1, new ArtifactRef("a1")), 2));
+        Assert.IsType<CommandSucceeded>(await Run(handler, new RecordTestsFailed(task, g1), 3));
+        Assert.Equal(4, await CountRowsAsync(task));
+
+        // Completion is refused while the latest outcome for the current generation is a failure.
+        var rejected = await Run(handler, new CompleteTask(task), 4);
+
+        Assert.Equal(new CommandRejected(RejectionCode.TestsNotPassed), rejected);
+        Assert.Equal(4, await CountRowsAsync(task));
+        var afterRejection = await Store.LoadStreamAsync(new StreamKey("Task", task.Value), CancellationToken.None);
+        Assert.Equal(4, afterRejection.Version);
+
+        Assert.IsType<CommandSucceeded>(await Run(handler, new RecordCodeGenerated(task, g2, new ArtifactRef("a2")), 4));
+        Assert.IsType<CommandSucceeded>(await Run(handler, new RecordTestsPassed(task, g2), 5));
+        var completed = Assert.IsType<CommandSucceeded>(await Run(handler, new CompleteTask(task), 6));
+        Assert.Equal(7, completed.NewVersion);
+
+        var loaded = await Store.LoadStreamAsync(new StreamKey("Task", task.Value), CancellationToken.None);
+        Assert.Equal(7, await CountRowsAsync(task));
+        Assert.Equal(7, loaded.Version);
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7], loaded.Events.Select(e => e.StreamVersion));
+        Assert.Equal(
+            ["TaskCreated", "TaskAssigned", "CodeGenerated", "TestsFailed", "CodeGenerated", "TestsPassed", "TaskCompleted"],
+            loaded.Events.Select(e => e.EventType));
+
+        // Expected state written by hand, not derived from the aggregate under test.
+        var state = TaskAggregate.Rehydrate(loaded.Events.Select(TaskEventMapper.FromStored));
+        Assert.Equal(task, state.Id);
+        Assert.Equal(WorkflowStatus.Completed, state.Status);
+        Assert.Equal(agent, state.AssignedAgent);
+        Assert.Equal(g2, state.CurrentGeneration);
+        Assert.Equal(TestOutcome.Passed, state.CurrentTestOutcome);
+        Assert.Equal(2, state.UsedGenerations.Count);
+        Assert.True(state.UsedGenerations.SetEquals([g1, g2]));
+        Assert.Equal(7, state.Version);
+    }
+
+    private static (TaskCommand[] Setup, TaskCommand Rejected) RejectionScenario(string name, TaskId task)
+    {
+        var agent = new AgentId("agent-1");
+        var g1 = new GenerationId("g1");
+        var g2 = new GenerationId("g2");
+        TaskCommand[] begun = [new CreateTask(task), new AssignTask(task, agent), new RecordCodeGenerated(task, g1, new ArtifactRef("a1"))];
+
+        return name switch
+        {
+            "generation-id-reused" => (begun, new RecordCodeGenerated(task, g1, new ArtifactRef("a-other"))),
+            "superseded-generation" =>
+                ([.. begun, new RecordCodeGenerated(task, g2, new ArtifactRef("a2"))], new RecordTestsPassed(task, g1)),
+            "complete-after-superseded-pass" =>
+                ([.. begun, new RecordTestsPassed(task, g1), new RecordCodeGenerated(task, g2, new ArtifactRef("a2"))],
+                    new CompleteTask(task)),
+            "task-completed" =>
+                ([.. begun, new RecordTestsPassed(task, g1), new CompleteTask(task)],
+                    new RecordCodeGenerated(task, g2, new ArtifactRef("a2"))),
+            _ => throw new ArgumentOutOfRangeException(nameof(name)),
+        };
+    }
+
+    [PostgresTheory]
+    [InlineData("generation-id-reused", RejectionCode.GenerationAlreadyUsed)]
+    [InlineData("superseded-generation", RejectionCode.SupersededGeneration)]
+    [InlineData("complete-after-superseded-pass", RejectionCode.TestsNotPassed)]
+    [InlineData("task-completed", RejectionCode.TaskAlreadyCompleted)]
+    public async Task A_rejected_command_persists_no_row_and_leaves_the_stream_version_unchanged(
+        string scenario,
+        RejectionCode expected)
+    {
+        var task = NewTask();
+        var handler = NewHandler();
+        var (setup, rejected) = RejectionScenario(scenario, task);
+        for (var i = 0; i < setup.Length; i++)
+        {
+            Assert.IsType<CommandSucceeded>(await Run(handler, setup[i], i));
+        }
+
+        Assert.Equal(setup.Length, await CountRowsAsync(task));
+
+        var result = await Run(handler, rejected, setup.Length);
+
+        Assert.Equal(new CommandRejected(expected), result);
+        Assert.Equal(setup.Length, await CountRowsAsync(task));
+        var loaded = await Store.LoadStreamAsync(new StreamKey("Task", task.Value), CancellationToken.None);
+        Assert.Equal(setup.Length, loaded.Version);
+    }
+
+    [PostgresFact]
     public async Task A_domain_rejection_appends_nothing()
     {
         var task = NewTask();
