@@ -10,7 +10,7 @@
 EventForge is an independent portfolio project exploring how **Event Sourcing, CQRS, Domain-Driven Design (DDD) and a Modular Monolith** can provide a reliable foundation for an AI-assisted software development workflow. The planned implementation uses **C# / .NET 10 and PostgreSQL**. AI agents will be **simulated**: the goal is to demonstrate the correctness of the workflow engine, not to integrate an LLM service.
 
 > **Current status: Active development — engineering foundation implemented, workflow behavior planned.**
-> The repository contains a verified .NET 10 solution, a minimal ASP.NET Core host, Clean Architecture project scaffolding, validated dependency injection, automated architecture dependency tests, a working GitHub Actions baseline CI pipeline and (EVF-21) PostgreSQL connectivity code, native launch configuration, optional Docker files and provisioning SQL. **EventForge is not yet a working workflow engine:** no domain behavior, projections or workflow endpoints exist; the PostgreSQL event store (EVF-22) is written, builds and passes its non-database tests, but its migration and PostgreSQL integration tests **have not been executed yet**. Per the [verification status](#development-environment-evf-21), the owner's existing PostgreSQL passed an owner-run check, Visual Studio was owner-reported healthy and VS Code launch is not independently verified. Everything under [Why EventForge?](#why-eventforge), [Architecture](#architecture) (planned runtime and lifecycle) and [Roadmap](#roadmap) describes intended design, not delivered functionality.
+> The repository contains a verified .NET 10 solution, a minimal ASP.NET Core host, Clean Architecture project scaffolding, validated dependency injection, automated architecture dependency tests, a working GitHub Actions baseline CI pipeline and (EVF-21) PostgreSQL connectivity code, native launch configuration, optional Docker files and provisioning SQL. **EventForge is not yet a working workflow engine:** no domain behavior, projections or workflow endpoints exist. The PostgreSQL event store (EVF-22: append/load with expected-version concurrency, migration and PostgreSQL 17 integration tests) is **implemented and verified in CI** ([PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)); it is not yet used by the API, aggregates or projections. Per the [verification status](#development-environment-evf-21), the owner's existing PostgreSQL passed an owner-run check, Visual Studio was owner-reported healthy and VS Code launch is not independently verified. Everything under [Why EventForge?](#why-eventforge), [Architecture](#architecture) (planned runtime and lifecycle) and [Roadmap](#roadmap) describes intended design, not delivered functionality.
 
 ## Engineering highlights
 
@@ -39,25 +39,24 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | `Dockerfile`, `.dockerignore`, `compose.yaml`, `.env.example` (EVF-21) | Implemented; image built, stack started, `/health` 200 and `docker compose down` verified locally (not CI) |
 | `db/provisioning/001-provision.sql` role/database/schema provisioning (EVF-21) | Implemented; executed once on a fresh isolated Compose volume (roles, database, schema and privileges checked); never run against any existing server |
 | Architecture checker resolves the approved Npgsql package (EVF-21) | Implemented and verified by tests; see [Automated architecture validation](#automated-architecture-validation) |
-| Event Store (EVF-22): Application contracts `IEventStore`, `StreamKey`, `NewEvent`, `StoredEvent`, `LoadedStream`, `AppendResult`; `PostgreSqlEventStore` in Infrastructure; migration `db/migrations/001-create-event-store.sql`; `tests/EventForge.IntegrationTests`; CI job `postgres-integration` | Source builds with 0 warnings and 0 errors, and the architecture and contract tests pass locally (non-database). **Not verified:** the migration, the PostgreSQL integration tests (no test has run against PostgreSQL) and the new CI job. Not wired into the API; no domain events exist. See [docs/development.md](docs/development.md#event-store-migration-evf-22) |
+| Event Store (EVF-22): Application contracts `IEventStore`, `StreamKey`, `NewEvent`, `StoredEvent`, `LoadedStream`, `AppendResult`; `PostgreSqlEventStore` in Infrastructure; migration `db/migrations/001-create-event-store.sql`; `tests/EventForge.IntegrationTests`; CI job `postgres-integration` | Implemented and verified: merged in [PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16); PR CI ([run 44706915605](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/actions/runs/44706915605)) and post-merge `main` CI ([run 44707030609](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/actions/runs/44707030609)) passed: 42 unit/architecture tests and 21 non-database tests, plus 15 PostgreSQL 17 integration tests (migration first run and re-run, append/load, conflicts, concurrency, rollback, privileges) against an isolated disposable PostgreSQL, with zero failures and zero skips. The migration has **not** been executed against the owner's development database (`127.0.0.1:5434`). Not wired into the API; no domain events, aggregates, projections, replay or upcasting exist. See [docs/development.md](docs/development.md#event-store-migration-evf-22) |
 | Engineering governance documents ([AGENTS.md](AGENTS.md), PR and commit templates) | Documented; enforcement is partial (see [governance](#ai-assisted-engineering-and-governance)) |
 
 ### Planned, not implemented
 
 | Area | Status |
 | --- | --- |
-| Database schema, tables and migrations | Planned (Tasks 3, 6; the API never runs migrations at startup) |
-| Event store (append/load, envelope, unique stream-version constraint) | Planned |
+| Projection tables and further migrations | Planned (Task 6; the API never runs migrations at startup). The event store table migration (EVF-22) is implemented, see above |
 | Domain aggregates and workflow behavior | Planned |
 | CQRS command/query handlers and REST workflow endpoints | Planned |
-| Optimistic concurrency (expected stream versions) | Planned |
+| Mapping stale expected versions to API responses (HTTP 409) | Planned (Task 5); expected-version concurrency in the event store is implemented (EVF-22) |
 | Transactional inline projections | Planned |
 | Event versioning and upcasting | Planned |
 | Deterministic replay and projection recovery | Planned |
-| Domain tests and PostgreSQL integration tests | Planned |
+| Domain tests and integration tests for projections, replay and recovery | Planned (event store PostgreSQL integration tests are implemented, EVF-22) |
 | Authentication and authorization | Planned (identity mechanism needs owner review) |
 | Required status checks and branch protection | Not configured; outside EVF-5 scope (separate project-owner approval) |
-| PostgreSQL, event-contract, concurrency and replay CI quality gates | Not implemented |
+| Event-contract and replay CI quality gates | Not implemented (the PostgreSQL event store gate exists, EVF-22) |
 | CD and deployment | Not implemented |
 
 Snapshots, durable request idempotency, online projection rebuilding, event branching, isolated previews and controlled side effects are deferred beyond the MVP.
@@ -187,7 +186,7 @@ Events are immutable, versioned facts. Examples and artifact references are synt
 | Tests | xUnit, Roslyn (architecture tests) | In use |
 | Continuous integration | GitHub Actions | In use (baseline) |
 | Architecture style | Modular Monolith, DDD, Event Sourcing, CQRS, Clean Architecture | Structure in place; behavior planned |
-| Primary data store | PostgreSQL 17 (including JSONB event payloads) | Connectivity code only; no schema or tables yet |
+| Primary data store | PostgreSQL 17 (including JSONB event payloads) | Connectivity code and the event store table and adapter (EVF-22); no projection tables yet |
 | Database access | Npgsql 10.0.3, direct parameterized SQL, no ORM | In use (connectivity verification only) |
 | Optional local environment | Docker Compose (PostgreSQL 17, API container) | Verified locally in an isolated stack (not CI) |
 
@@ -274,11 +273,11 @@ Details, commands and limits are in [docs/development.md](docs/development.md). 
 | Mode 1: Visual Studio native API launch, `/health` | **Healthy** (owner-reported) |
 | Mode 1: Visual Studio Code native launch | **Not independently verified** |
 | Provisioning script re-execution (second run on an existing volume) | **Not validated** |
-| CI for EVF-21 | **Verified** on `main`: 42 tests passed, 0 failed, 0 skipped, 0 build warnings and 0 errors. The workflow builds no containers; the PostgreSQL gate is added by EVF-22 and is unverified |
+| CI for EVF-21 | **Verified** on `main`: 42 tests passed, 0 failed, 0 skipped, 0 build warnings and 0 errors. The workflow builds no containers; the PostgreSQL gate was added by EVF-22 (verified, see above) |
 
 Local verification used a throwaway, git-ignored `.env` and a Compose volume; both are intentionally preserved and nothing removes them automatically. In the Docker runtime image the API prints a nonfatal `libgssapi_krb5.so.2` warning (Npgsql probing for Kerberos); and because the official PostgreSQL image trusts loopback connections inside the container, an in-container `127.0.0.1` test is not proof of password authentication. See [docs/development.md](docs/development.md).
 
-Security limits: credentials are protected only by user secrets or environment variables (not encrypted at rest); the Compose stack is for local use (loopback, no TLS, passwords in container environment); role separation is provisioned but table-level grants exist only in the not-yet-executed EVF-22 migration (runtime role: `SELECT` and `INSERT` on `eventforge.events`), and operator rights do not exist yet. These are limitations, not delivered safeguards.
+Security limits: credentials are protected only by user secrets or environment variables (not encrypted at rest); the Compose stack is for local use (loopback, no TLS, passwords in container environment); role separation is provisioned but table-level grants exist only in the EVF-22 migration (runtime role: `SELECT` and `INSERT` on `eventforge.events`; verified against an isolated disposable PostgreSQL, not applied to the owner's development database), and operator rights do not exist yet. These are limitations, not delivered safeguards.
 
 ## Continuous integration
 
@@ -298,7 +297,7 @@ flowchart LR
 
 Build and test failures fail the job. The TRX results are uploaded as the `test-results-trx` artifact, also when tests fail. This job runs every test except those in the `PostgreSql` category.
 
-EVF-22 adds a second job, `postgres-integration` (**not yet executed**): it starts an ephemeral `postgres:17` service on the runner with a throwaway password, runs only the `PostgreSql`-category tests and then fails unless the TRX shows tests were executed, all passed and none were skipped. See [docs/development.md](docs/development.md#event-store-migration-evf-22).
+EVF-22 adds a second job, `postgres-integration` (executed and passing on the PR and on `main`, 15 tests, 0 failures, 0 skipped): it starts an ephemeral `postgres:17` service on the runner with a throwaway password, runs only the `PostgreSql`-category tests and then fails unless the TRX shows tests were executed, all passed and none were skipped. See [docs/development.md](docs/development.md#event-store-migration-evf-22).
 
 ### Verified baseline results (November 19, 2026)
 
@@ -382,7 +381,7 @@ The 12 roadmap tasks, milestones and MVP acceptance criteria are preserved in [d
 | --- | --- | --- |
 | 1 | Solution and architecture setup | Completed (EVF-13) |
 | 2 | PostgreSQL and Docker configuration | Partially implemented (EVF-21; VS Code launch, provisioning re-run and PR CI not yet verified) |
-| 3 | Event Store implementation | Partially implemented (EVF-22; migration, PostgreSQL integration tests and CI gate not yet executed) |
+| 3 | Event Store implementation | Implemented and verified (EVF-22, [PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)) |
 | 4 | Domain aggregates and event persistence | Planned |
 | 5 | CQRS commands and queries | Planned |
 | 6 | Transactional projections | Planned |
