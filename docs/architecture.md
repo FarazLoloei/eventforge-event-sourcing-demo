@@ -185,7 +185,10 @@ The stable `eventType` and numeric `schemaVersion` identify a logical event cont
 
 **Required constraints:** primary key on `event_id`; unique constraint on `(stream_type, stream_id, stream_version)`, whose underlying index also serves ordered loading of one stream (no separate index is added unless measurements show a need). A JSONB payload is flexible but does **not** replace explicit contract validation and versioned deserialization.
 
-### EVF-22 implementation notes (written, not yet run against PostgreSQL)
+### EVF-22 implementation notes (implemented; verified against an isolated PostgreSQL 17 in CI, [PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16))
+
+This describes the implemented Event Store only. The API workflow, Task aggregate and events, inline projections, replay/recovery and upcasting remain unimplemented (Tasks 4-8).
+
 
 The Application layer owns `IEventStore` (`LoadStreamAsync`, `AppendAsync`) and the contracts `StreamKey`, `NewEvent`, `StoredEvent`, `LoadedStream` and `AppendResult` (`Workflow/Application/EventStore`). `PostgreSqlEventStore` in Infrastructure implements them over `eventforge.events`, created by `db/migrations/001-create-event-store.sql`. Constraint names: `events_pkey`, `events_stream_version_uq`; `CHECK`s require positive versions, stream/event names matching `^[A-Za-z][A-Za-z0-9._-]{0,99}$` and JSON-object payload and metadata. `recorded_at` is the PostgreSQL transaction timestamp, returned in the persisted envelope (one value per append batch).
 

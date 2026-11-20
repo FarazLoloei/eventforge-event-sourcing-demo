@@ -2,7 +2,7 @@
 
 How to run EventForge in the two supported modes (native development, and a Docker Compose evaluation stack), and how PostgreSQL is configured and provisioned. For what is implemented and verified, see the [README status tables](../README.md#current-implementation); this guide adds no architectural decisions (the Npgsql decision is recorded in [ADR 0001](adr/0001-architecture.md#decision-history)).
 
-> **Status:** PostgreSQL connectivity code, native launch configuration, Docker files and provisioning SQL exist. Mode 2 and the native check against the Compose PostgreSQL were run successfully in an isolated stack (author-reported, not CI). Mode 1: the runtime-role check against the owner's existing PostgreSQL 17.11 on `127.0.0.1:5434` passed (owner-run) and a Visual Studio launch reported `/health` Healthy (owner-reported); the VS Code launch is **not independently verified**. CI for EVF-21 is verified (`main` run: 42 tests passed, 0 failed, 0 skipped, 0 build warnings or errors). EVF-22 adds an event store migration and PostgreSQL integration tests that have **not been executed**; no workflow behavior exists, and the API does not use the event store.
+> **Status:** PostgreSQL connectivity code, native launch configuration, Docker files and provisioning SQL exist. Mode 2 and the native check against the Compose PostgreSQL were run successfully in an isolated stack (author-reported, not CI). Mode 1: the runtime-role check against the owner's existing PostgreSQL 17.11 on `127.0.0.1:5434` passed (owner-run) and a Visual Studio launch reported `/health` Healthy (owner-reported); the VS Code launch is **not independently verified**. CI for EVF-21 is verified (`main` run: 42 tests passed, 0 failed, 0 skipped, 0 build warnings or errors). EVF-22 adds the event store migration and PostgreSQL integration tests, verified against an isolated disposable PostgreSQL 17 in CI ([PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)); the migration has **not** been run against the owner's development database. No workflow behavior exists, and the API does not use the event store.
 
 ## Execution modes
 
@@ -142,7 +142,7 @@ The PostgreSQL check is `pg_isready` over TCP plus a query confirming that schem
    Expected: `PostgreSQL verification: PASSED`, exit code 0. Clear the variable afterwards (`Remove-Item Env:ConnectionStrings__EventForge`).
 4. If something fails, read `docker compose --profile full logs postgres` or `logs api`. Logs must not contain the connection string or passwords; report any occurrence as a defect.
 
-No database tables, event store or workflow behavior exist yet, so the stack demonstrates startup, configuration and provisioning only.
+The Compose stack does not run the event store migration (migrations are explicit and owner-run) and no workflow behavior exists, so it demonstrates startup, configuration and provisioning only.
 
 ### Non-destructive shutdown
 
@@ -198,7 +198,7 @@ The Compose `postgres` service runs the same file automatically on first start. 
 
 ## Event Store migration (EVF-22)
 
-> **Status: written, not executed.** The migration and the PostgreSQL integration tests have not been run against any database. Nothing below has been verified.
+> **Status: implemented and verified in CI.** Merged in [PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16). PR CI ([run 44706915605](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/actions/runs/44706915605)) and post-merge `main` CI ([run 44707030609](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/actions/runs/44707030609)) passed: 42 unit/architecture tests, 21 non-database tests and 15 PostgreSQL 17 integration tests, zero failures and zero skips. The migration (first run and re-run) and the event store behavior were verified against an isolated, disposable PostgreSQL service. **The migration has not been executed against the owner's existing development database (`127.0.0.1:5434`).** Running it there is a separate owner action.
 
 `db/migrations/001-create-event-store.sql` creates `eventforge.events` (columns, `events_pkey`, `events_stream_version_uq` and the `CHECK` constraints are described in [architecture.md](architecture.md#4-event-store-design-postgresql)) and grants the runtime role `eventforge_app` only `SELECT` and `INSERT`. Migrations are run explicitly by the owner and never by the API.
 
@@ -234,7 +234,7 @@ In CI the `postgres-integration` job does the same with an ephemeral service con
 
 ### Known limitations
 
-`CurrentVersion` is `null` for race-based conflicts and duplicate ids (callers reload). The gap check on append compares `count(*)` with `max(stream_version)`. `recorded_at` is one value per append batch. JSONB normalises payload formatting. A commit whose outcome is unknown throws and requires a reload; there is no request idempotency. Versions are 32-bit. Database errors other than the two mapped unique violations propagate as `PostgresException`; its `Detail` (for example on a check violation) can contain row data, so callers must not log whole exceptions, and a payload containing `\u0000` is rejected by JSONB. The drift check does not compare column order. The CI service image `postgres:17` is a floating tag, not digest-pinned. The migration is sent through Npgsql as a single multi-statement command by the tests; that path is as unverified as the rest.
+`CurrentVersion` is `null` for race-based conflicts and duplicate ids (callers reload). The gap check on append compares `count(*)` with `max(stream_version)`. `recorded_at` is one value per append batch. JSONB normalises payload formatting. A commit whose outcome is unknown throws and requires a reload; there is no request idempotency. Versions are 32-bit. Database errors other than the two mapped unique violations propagate as `PostgresException`; its `Detail` (for example on a check violation) can contain row data, so callers must not log whole exceptions, and a payload containing `\u0000` is rejected by JSONB. The drift check does not compare column order. The CI service image `postgres:17` is a floating tag, not digest-pinned. The tests execute the migration through Npgsql as a single multi-statement command; the `psql -f` procedure above is the owner procedure for real databases.
 
 ## Verification
 
