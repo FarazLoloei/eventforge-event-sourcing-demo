@@ -36,6 +36,7 @@ jobs:
         run: >-
           dotnet test EventForge.slnx
           --configuration Release --no-build --no-restore
+          --filter "Category!=PostgreSql"
           --logger "trx;LogFileName=test-results.trx"
           --results-directory "${{ runner.temp }}/test-results"
 
@@ -45,5 +46,76 @@ jobs:
         with:
           name: test-results-trx
           path: ${{ runner.temp }}/test-results/**/*.trx
+          if-no-files-found: warn
+          retention-days: 14
+
+  postgres-integration:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      # Ephemeral, runner-local PostgreSQL with a throwaway password; it holds no real data or credentials and is
+      # discarded with the runner. The test guard additionally refuses any server that already has EventForge objects.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci-throwaway-password
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      EVENTFORGE_IT_ENABLED: disposable-postgres
+      EVENTFORGE_IT_ADMIN_CONNECTION: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=ci-throwaway-password
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore tests/EventForge.IntegrationTests
+
+      - name: Build (Release)
+        run: dotnet build tests/EventForge.IntegrationTests --configuration Release --no-restore
+
+      - name: Test PostgreSQL integration (Release)
+        run: >-
+          dotnet test tests/EventForge.IntegrationTests
+          --configuration Release --no-build --no-restore
+          --filter "Category=PostgreSql"
+          --logger "trx;LogFileName=postgres-integration.trx"
+          --results-directory "${{ runner.temp }}/postgres-results"
+
+      # A green exit code is not enough: the gate must prove PostgreSQL tests really ran and none were skipped.
+      - name: Require executed, passing PostgreSQL tests
+        run: |
+          trx=$(find "${{ runner.temp }}/postgres-results" -name 'postgres-integration.trx' | head -n 1)
+          test -n "$trx" || { echo "No TRX file was produced."; exit 1; }
+          counters=$(grep -o '<Counters [^>]*>' "$trx" | head -n 1)
+          # A missing counter becomes 0 (and then fails the gate with a clear message) instead of aborting silently.
+          count() { echo "$counters" | grep -o " $1=\"[0-9]*\"" | grep -o '[0-9]*' || echo 0; }
+          total=$(count total); executed=$(count executed); passed=$(count passed)
+          failed=$(count failed); notexecuted=$(count notExecuted)
+          echo "total=$total executed=$executed passed=$passed failed=$failed notExecuted=$notexecuted"
+          if [ "$executed" -eq 0 ] || [ "$passed" -ne "$total" ] || [ "$failed" -ne 0 ] || [ "$notexecuted" -ne 0 ]; then
+            echo "PostgreSQL integration gate failed: tests were not all executed and passed."
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: postgres-integration-trx
+          path: ${{ runner.temp }}/postgres-results/**/*.trx
           if-no-files-found: warn
           retention-days: 14
