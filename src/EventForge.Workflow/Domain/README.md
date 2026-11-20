@@ -23,6 +23,6 @@ Namespace: `EventForge.Workflow.Domain`
 - `TaskAggregate.Rehydrate(history)`: folds an ordered history from `TaskState.Initial`.
 - Unit tests for transitions, rejections, invalid history and malformed input in `tests/EventForge.UnitTests/Domain`.
 
-**Not implemented:** command handlers, event serialization and Event Store mapping (EVF-30), REST API, projections and replay. Nothing calls the aggregate yet.
+**Not implemented:** REST API, projections and replay. The Application layer's `TaskCommandHandler` and `TaskEventMapper` (EVF-30) call the aggregate and map events to the Event Store; the Domain itself has no serialization or persistence.
 
 The Domain dependency rules are checked by the static architecture tests in `tests/EventForge.UnitTests` (EVF-16), which now scan these Domain sources.

@@ -196,24 +196,40 @@ public sealed class TaskAggregateDecideTests
         Assert.Throws<ArgumentNullException>(() => Decide(TaskState.Initial, null!));
     }
 
+    private static TaskCommand[] NullMemberCommands() =>
+    [
+        new CreateTask(null!),
+        new AssignTask(null!, Agent),
+        new AssignTask(T1, null!),
+        new RecordCodeGenerated(null!, G1, Art1),
+        new RecordCodeGenerated(T1, null!, Art1),
+        new RecordCodeGenerated(T1, G1, null!),
+        new RecordTestsPassed(null!, G1),
+        new RecordTestsPassed(T1, null!),
+        new RecordTestsFailed(null!, G1),
+        new RecordTestsFailed(T1, null!),
+        new CompleteTask(null!),
+    ];
+
     [Fact]
     public void Commands_with_a_null_member_throw_for_every_command_type() =>
         Assert.All(
-            new TaskCommand[]
-            {
-                new CreateTask(null!),
-                new AssignTask(null!, Agent),
-                new AssignTask(T1, null!),
-                new RecordCodeGenerated(null!, G1, Art1),
-                new RecordCodeGenerated(T1, null!, Art1),
-                new RecordCodeGenerated(T1, G1, null!),
-                new RecordTestsPassed(null!, G1),
-                new RecordTestsPassed(T1, null!),
-                new RecordTestsFailed(null!, G1),
-                new RecordTestsFailed(T1, null!),
-                new CompleteTask(null!),
-            },
+            NullMemberCommands(),
             c => Assert.ThrowsAny<ArgumentException>(() => Decide(Generated(G1), c)));
+
+    [Fact]
+    public void ValidateCommand_accepts_well_formed_commands_and_rejects_malformed_ones()
+    {
+        Assert.All(
+            NonCreateCommands().Append(new CreateTask(T1)),
+            c => TaskAggregate.ValidateCommand(c));
+
+        Assert.Throws<ArgumentNullException>(() => TaskAggregate.ValidateCommand(null!));
+        Assert.Throws<ArgumentException>(() => TaskAggregate.ValidateCommand(new UnknownCommand(T1)));
+        Assert.All(
+            NullMemberCommands(),
+            c => Assert.ThrowsAny<ArgumentException>(() => TaskAggregate.ValidateCommand(c)));
+    }
 
     [Fact]
     public void Malformed_commands_throw_before_business_rules_are_evaluated()

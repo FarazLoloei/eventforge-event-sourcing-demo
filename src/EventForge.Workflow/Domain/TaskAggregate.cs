@@ -140,8 +140,15 @@ public static class TaskAggregate
         && state.Status == WorkflowStatus.Assigned
         && generationId == state.CurrentGeneration;
 
-    private static void ValidateCommand(TaskCommand command)
+    /// <summary>
+    /// Throws <see cref="ArgumentException"/> (or <see cref="ArgumentNullException"/>) if the command is null, has a
+    /// null member or is an unknown type. <see cref="Decide"/> calls this first; callers may call it earlier to fail
+    /// before doing any I/O. It evaluates no business rule.
+    /// </summary>
+    public static void ValidateCommand(TaskCommand command)
     {
+        ArgumentNullException.ThrowIfNull(command);
+
         var valid = command switch
         {
             CreateTask c => c.TaskId is not null,
