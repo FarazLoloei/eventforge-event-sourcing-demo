@@ -109,12 +109,33 @@ public static class ArchitectureFixtures
             """),
     ];
 
+    /// <summary>Infrastructure code using the approved Npgsql package: must be accepted.</summary>
+    public static IReadOnlyList<SourceFile> ValidInfrastructureNpgsqlUsage { get; } =
+    [
+        .. ValidWorld,
+        new("src/EventForge.Infrastructure/SyntheticNpgsqlStore.cs", """
+            using Npgsql;
+
+            namespace EventForge.Infrastructure.Persistence;
+
+            public sealed class SyntheticNpgsqlStore(NpgsqlDataSource dataSource)
+            {
+                public NpgsqlDataSource DataSource { get; } = dataSource;
+
+                public async Task<int> CountAsync(CancellationToken cancellationToken)
+                {
+                    await using var command = DataSource.CreateCommand("SELECT 1");
+                    return (int)(await command.ExecuteScalarAsync(cancellationToken) ?? 0);
+                }
+            }
+            """),
+    ];
+
     /// <summary>Stand-ins for packages that are deliberately not referenced. Compiled, never analyzed.</summary>
     public static IReadOnlyList<SourceFile> ForbiddenFrameworkStubs { get; } =
     [
         new("stubs/ForbiddenFrameworkStubs.cs", """
             namespace Microsoft.AspNetCore.Http { public class HttpContext; }
-            namespace Npgsql { public class NpgsqlConnection; }
             namespace Microsoft.EntityFrameworkCore { public class DbContext; }
             """),
     ];
@@ -172,6 +193,50 @@ public static class ArchitectureFixtures
             public sealed class DomainUsesNpgsql
             {
                 private Npgsql.NpgsqlConnection? _connection; // violates
+            }
+            """),
+        Negative("domain-depends-on-npgsql-via-using-and-data-source",
+            "Domain-must-not-depend-on-Npgsql", "NpgsqlDataSource",
+            DomainPath + "DomainUsesNpgsqlDataSource.cs", """
+            using Npgsql; // violates
+
+            namespace EventForge.Workflow.Domain;
+
+            public sealed class DomainUsesNpgsqlDataSource
+            {
+                private readonly NpgsqlDataSource? _dataSource; // violates
+            }
+            """),
+        Negative("application-depends-on-npgsql",
+            "Application-must-not-depend-on-Npgsql", "NpgsqlDataSource",
+            ApplicationPath + "ApplicationUsesNpgsql.cs", """
+            using Npgsql; // violates
+
+            namespace EventForge.Workflow.Application;
+
+            public sealed class ApplicationUsesNpgsql
+            {
+                private readonly NpgsqlDataSource? _dataSource; // violates
+            }
+            """),
+        Negative("simulation-depends-on-npgsql",
+            "Simulation-must-not-depend-on-Npgsql", "NpgsqlDataSource",
+            "src/EventForge.Simulation/SimulationUsesNpgsql.cs", """
+            namespace EventForge.Simulation;
+
+            public sealed class SimulationUsesNpgsql
+            {
+                private readonly Npgsql.NpgsqlDataSource? _dataSource; // violates
+            }
+            """),
+        Negative("infrastructure-uses-unapproved-package-is-not-a-silent-pass",
+            "analysis-incomplete", "CS0246",
+            "src/EventForge.Infrastructure/InfrastructureUsesUnapprovedPackage.cs", """
+            namespace EventForge.Infrastructure;
+
+            public sealed class InfrastructureUsesUnapprovedPackage
+            {
+                private readonly Dapper.SqlMapper? _mapper; // violates
             }
             """),
         Negative("domain-depends-on-entity-framework",

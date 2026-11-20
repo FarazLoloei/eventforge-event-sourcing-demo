@@ -98,11 +98,13 @@ Use strongly typed commands, events, and domain results, with records and immuta
 
 Use constructor injection and small application-owned interfaces for persistence and simulated outcomes. Keep concrete implementations where an interface adds no useful boundary; avoid generic repository layers, service locators, and mandatory mediator or event-framework dependencies. Keep the domain independent of ASP.NET Core and database libraries. Use asynchronous I/O with propagated `CancellationToken` values at application and adapter boundaries; keep reducers synchronous and pure, and dispose database resources deterministically.
 
-Direct parameterized SQL with Npgsql is a potential persistence approach, not an adopted library decision. It could make expected-version enforcement and transaction ownership explicit: event inserts and inline projection writes must use the same connection and transaction, with rollback on failure and success reported after commit. SQL identifiers require trusted mappings rather than value parameters. Dependency provenance and licensing require review before adoption. See [Npgsql basic usage](https://www.npgsql.org/doc/basic-usage.html) for parameter and transaction mechanics.
+**Adopted (EVF-21, ADR 0001 decision history):** direct parameterized SQL with **Npgsql 10.0.3** and no ORM, confined to `EventForge.Infrastructure`. Provenance and licensing were reviewed before adoption: NuGet.org repository-signed package from the official `npgsql/npgsql` repository, PostgreSQL license, only Microsoft transitive dependencies, no known vulnerabilities at the time of review. It makes expected-version enforcement and transaction ownership explicit: event inserts and inline projection writes must use the same connection and transaction, with rollback on failure and success reported after commit. SQL identifiers require trusted mappings rather than value parameters. See [Npgsql basic usage](https://www.npgsql.org/doc/basic-usage.html) for parameter and transaction mechanics.
+
+**Implemented (EVF-21):** `PostgreSqlDatabase` (Infrastructure) owns one `NpgsqlDataSource`, registered as a singleton in the API composition root and disposed by the container. Npgsql types do not appear outside Infrastructure. No Event Store, aggregate or projection exists yet. The connection string is the standard `ConnectionStrings:EventForge` setting (user secrets or `ConnectionStrings__EventForge`); the host does not require it to start. See the [development guide](development.md) for configuration, the read-only `--verify-database` check, optional Docker support and provisioning.
 
 ### Composition root and dependency injection (EVF-17)
 
-**Implemented:** `src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container (no additional container, scanning or service locator). It sets `ValidateOnBuild = true` and `ValidateScopes = true` through `UseDefaultServiceProvider` in every environment, registers only `AddHealthChecks()`, and maps `/health`. No application, domain or adapter service is registered, because none exists yet.
+**Implemented:** `src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container (no additional container, scanning or service locator). It sets `ValidateOnBuild = true` and `ValidateScopes = true` through `UseDefaultServiceProvider` in every environment, registers `AddHealthChecks()` and (EVF-21) a lazily created singleton `PostgreSqlDatabase`, and maps `/health`. No application, domain or other adapter service is registered, because none exists yet.
 
 **Deferred:** Workflow, Infrastructure and Simulation registrations are not implemented. Each will be added explicitly in the API composition root when a concrete service exists, not before. No future service should be assumed to be registered or validated.
 
@@ -112,7 +114,7 @@ Direct parameterized SQL with Npgsql is a potential persistence approach, not an
 - Services use constructor injection. Circular dependencies and captive scoped dependencies are forbidden.
 - Singletons must be safe for shared concurrent use. Scoped services use a request or unit-of-work lifetime. Transient is used where appropriate. Each lifetime is chosen from an actual implementation, not speculatively.
 
-**Limits of validation:** `ValidateOnBuild` and `ValidateScopes` are a baseline check on the registered graph. They do not guarantee validation of every runtime dependency path, factory delegate implementation or open generic registration. The `/health` endpoint reports process liveness only; it does not prove database readiness, workflow behavior or future service resolution.
+**Limits of validation:** `ValidateOnBuild` and `ValidateScopes` are a baseline check on the registered graph. They do not guarantee validation of every runtime dependency path, factory delegate implementation or open generic registration. The `/health` endpoint reports process liveness only; it does not prove database readiness, workflow behavior or future service resolution. Because the database singleton is created by a factory, `ValidateOnBuild` does not exercise it; database readiness is checked only by the explicit `--verify-database` command.
 
 ## 3. Domain model and event contract
 
@@ -371,10 +373,13 @@ Initial architecture dependency tests are implemented and run locally and in CI 
 
 **Pending or not implemented:** required status checks and branch protection (not configured; they require separate project-owner approval and are outside EVF-5 scope), PostgreSQL and further quality gates (domain, PostgreSQL, upcaster, concurrency, replay), and CD or deployment. These gates are planned and land with the capabilities they verify. Verification must also cover denied database operations, rejected unauthorized/invalid requests with no appended events, and redacted diagnostics alongside existing domain, concurrency, and replay checks. Human review remains required; the security controls described in this document are proposed and not implemented.
 
+**EVF-21 (PostgreSQL and Docker configuration):** the architecture checker additionally resolves the single approved `Npgsql.dll` (fail-closed if absent or not 10.x). Npgsql is forbidden in Domain, Application and Simulation and permitted only in Infrastructure, with negative fixtures for each; tests also assert that only Infrastructure references the package and that the checker's version matches. PostgreSQL integration tests, role-privilege tests and CI database gates are not implemented. Provisioning SQL and the Docker/Compose files were exercised once in an isolated local stack (author-reported, not CI; see [development.md](development.md#verification)); the owner's existing PostgreSQL passed an owner-run `--verify-database` check and Visual Studio was owner-reported healthy. Not verified: the VS Code launch, a second provisioning run, and pull-request CI, which has not yet executed for EVF-21.
+
 ## 10. Related documents
 
 - [README](../README.md)
 - [Implementation roadmap](roadmap.md)
+- [Development environment (EVF-21)](development.md)
 - [ADR 0001 — Architectural foundation](adr/0001-architecture.md)
 
 Apart from the implemented foundation described in the status banner, the technology choices and constraints in this document are **proposals pending implementation and verification**, not benchmark results or evidence of a deployed system.
