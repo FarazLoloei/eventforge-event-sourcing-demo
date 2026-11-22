@@ -4,9 +4,9 @@
 
 ## 1. Scope and non-goals
 
-**In scope (Roadmap Task 5, parent EVF-24):** seven REST routes over the existing Task workflow, explicit request/response/error contracts, a Swagger UI approach, and a verification plan.
+**In scope (Roadmap Task 5, parent EVF-24):** seven REST routes over the existing Task workflow, explicit request/response/error contracts, Swagger UI/OpenAPI integration, and a verification matrix.
 
-**Educational goal:** show CQRS over an event-sourced aggregate, optimistic concurrency and honest failure reporting, using *Minimum Sufficient Architecture*. Every item below exists for a correctness or educational reason.
+**Educational goal:** show CQRS over an event-sourced aggregate, optimistic concurrency and honest failure reporting, using **Minimum Sufficient Architecture**. Every item below exists for a correctness or educational reason.
 
 **Non-goals:** authentication/authorization, rate limiting, multi-tenancy, API versioning, pagination, projections or new tables (Task 6), upcasting (Task 8), replay (Task 7), durable request idempotency (deferred), MediatR, EF Core, brokers, extra services or layers, new Domain commands/events/fields, production observability, public deployment.
 
@@ -22,7 +22,7 @@
 | `TaskEventMapper.FromStored` (strict schema v1, fail-closed) | Event-history and state reads; no second validator. |
 | `IEventStore.LoadStreamAsync` (throws `EventStreamCorruptedException` on gaps) | Query reads. |
 | `PostgreSqlEventStore`, `PostgreSqlDatabase` | Persistence; `--verify-database`; lazy singleton so startup needs no credentials. |
-| Integration-test patterns (`PostgresFact`, `PostgresFixture`, `TaskWorkflowPostgresTests`) | EVF-34/35 test style. |
+| Integration-test patterns (`PostgresFact`, `PostgresFixture`, `TaskWorkflowPostgresTests`) | Existing test patterns reused in EVF-34/35. |
 
 **Handler facts the HTTP layer must respect (verified in code):**
 
@@ -42,10 +42,10 @@ Command: HTTP endpoint -> request DTO validation -> TaskCommandHandler -> TaskAg
 Query:   HTTP endpoint -> TaskQueryHandler -> IEventStore.LoadStreamAsync -> TaskEventMapper + TaskAggregate.Apply -> response DTO
 ```
 
-- **Placement.** `TaskQueryHandler` (new, EVF-34) lives in `EventForge.Workflow/Application/Tasks/` next to the command handler and returns Application result types (state, history, `InvalidHistory`, not-found), never HTTP types. Request/response DTOs, route handlers and result-to-HTTP mapping live in `EventForge.Api` (for example `Tasks/TaskEndpoints.cs`, `Tasks/TaskContracts.cs`, `Tasks/TaskProblemMapping.cs`). Domain and Application reference no ASP.NET Core or Npgsql types (already enforced by the architecture tests).
+- **Placement.** `TaskQueryHandler` (implemented in EVF-34) lives in `EventForge.Workflow/Application/Tasks/` next to the command handler and returns Application result types (state, history, `InvalidHistory`, not-found), never HTTP types. Request/response DTOs, route handlers and result-to-HTTP mapping live in `EventForge.Api` (`Tasks/TaskEndpoints.cs`, `Tasks/TaskQueryEndpoints.cs`, `Tasks/TaskContracts.cs`, `Tasks/RequestValidation.cs`, `Tasks/TaskProblems.cs`). Domain and Application reference no ASP.NET Core or Npgsql types (already enforced by the architecture tests).
 - **Reads.** For Task 5, queries rebuild state directly from committed Event Store history on a primary-database read. No projection table is read or written (`task_overview` is Task 6). Queries never bypass the mapper or `Apply`.
 - **Writes.** Every state change goes through `TaskCommandHandler`; the simulator will use the same boundary later.
-- **Shared fold (smallest reuse step).** The handler's private load-and-fold loop (stream identity check, position check, mapper, `Apply`, reason mapping) must not be copied into the query handler. EVF-34 extracts it unchanged into one small internal Application function (for example `TaskHistory.Fold(LoadedStream)` returning state or `InvalidHistory`) used by both handlers; the existing handler tests must pass unmodified. **Owner-approved.** This is the only planned change to existing production code.
+- **Shared fold (smallest reuse step).** In EVF-34, the command handler's history-validation and folding logic was extracted into the small internal `TaskHistory.Fold` function. Both `TaskCommandHandler` and `TaskQueryHandler` reuse it, so stream identity, event positions, strict mapping and `TaskAggregate.Apply` are checked consistently. The command handler still compares `expectedVersion` before folding. This owner-approved extraction was verified by the existing handler tests and a regression test for stale versions against invalid history.
 
 ## 4. Exact REST routes and DTO contracts
 
@@ -102,12 +102,33 @@ Command success body (all five) contains only the task id and the new stream ver
   "taskId": "0b9f6f2e-6c1d-4f5e-9a57-3a1d2c4e8b10",
   "version": 3,
   "events": [
-    { "eventId": "…", "streamVersion": 1, "eventType": "TaskCreated", "schemaVersion": 1,
-      "recordedAt": "2026-11-22T10:00:00Z", "data": { "taskId": "0b9f6f2e-…" } },
-    { "eventId": "…", "streamVersion": 2, "eventType": "TaskAssigned", "schemaVersion": 1,
-      "recordedAt": "…", "data": { "agentId": "agent-demo-1" } },
-    { "eventId": "…", "streamVersion": 3, "eventType": "CodeGenerated", "schemaVersion": 1,
-      "recordedAt": "…", "data": { "generationId": "g1", "artifactRef": "synthetic://artifacts/demo/g1" } }
+    {
+      "eventId": "a1111111-1111-4111-8111-111111111111",
+      "streamVersion": 1,
+      "eventType": "TaskCreated",
+      "schemaVersion": 1,
+      "recordedAt": "2026-11-22T10:00:00Z",
+      "data": { "taskId": "0b9f6f2e-6c1d-4f5e-9a57-3a1d2c4e8b10" }
+    },
+    {
+      "eventId": "b2222222-2222-4222-8222-222222222222",
+      "streamVersion": 2,
+      "eventType": "TaskAssigned",
+      "schemaVersion": 1,
+      "recordedAt": "2026-11-22T10:01:00Z",
+      "data": { "agentId": "agent-demo-1" }
+    },
+    {
+      "eventId": "c3333333-3333-4333-8333-333333333333",
+      "streamVersion": 3,
+      "eventType": "CodeGenerated",
+      "schemaVersion": 1,
+      "recordedAt": "2026-11-22T10:02:00Z",
+      "data": {
+        "generationId": "g1",
+        "artifactRef": "synthetic://artifacts/demo/g1"
+      }
+    }
   ]
 }
 ```
@@ -139,7 +160,7 @@ Errors use RFC 9457 **Problem Details** (`application/problem+json`, `AddProblem
 
 ## 6. Task state and event-history query approach
 
-`TaskQueryHandler` (EVF-34) offers `GetStateAsync(TaskId)` and `GetHistoryAsync(TaskId)`:
+`TaskQueryHandler` (implemented in EVF-34) exposes `GetStateAsync` and `GetHistoryAsync` for a `TaskId` and cancellation token:
 
 1. `LoadStreamAsync(new StreamKey("Task", id))`; `EventStreamCorruptedException` → invalid history.
 2. Version 0 → not found.
@@ -150,15 +171,15 @@ The history query folds the whole stream even though it only lists events, so an
 
 ## 7. Swagger UI and OpenAPI approach
 
-Approved requirement; **not installed or configured in EVF-32.** Integration is EVF-33.
+Swagger UI and OpenAPI are **implemented**. EVF-32 approved the design; EVF-33 introduced the packages and endpoint integration, and EVF-34 added the two query routes.
 
-- **Document generation:** Microsoft's built-in `Microsoft.AspNetCore.OpenApi` (`AddOpenApi()`, `MapOpenApi()` serving `/openapi/v1.json`).
-- **Interactive UI:** Swagger UI at `http://localhost:5080/swagger` (existing `http` launch profile port), pointed at `/openapi/v1.json`. The UI needs one NuGet package (candidate: `Swashbuckle.AspNetCore.SwaggerUI`, UI only, no Swashbuckle document generation). `AGENTS.md` requires a provenance, licence and vulnerability review before adoption; EVF-33 performs compatibility, provenance, security and licensing checks and records the result; package versions are selected there, not here. Swagger UI is **required**. No new ADR is needed solely for a minor Swagger UI or API-testing package addition; significant architectural changes still require owner approval and an ADR.
-- **Exposure:** OpenAPI document and Swagger UI are mapped **only when `IsDevelopment()`**. `/health` is unaffected.
-- **Organization:** two tags via the group — `Task Commands` (the five POST routes) and `Task Queries` (the two GET routes). Per endpoint: `WithSummary`, `WithDescription`, `Produces<T>` for success and `ProducesProblem(...)` for 400/404/409/500. Request examples use only synthetic values (`agent-demo-1`, `g1`, `synthetic://…`) and an `expectedVersion` description ("the `version` returned by your last call").
-- **Executable end to end:** the complete lifecycle must be runnable from Swagger UI by copying `version` from each response into the next request, including the failure/recovery path.
-- **Not doing:** API versioning, XML-doc pipelines, custom schema filters, authentication UI, code generation.
-- **Verify in EVF-33 (not assumed here):** that the chosen UI package renders the OpenAPI version emitted by .NET 10's generator, and that nullable `expectedVersion` and the `outcome` values appear correctly in the schema.
+- **OpenAPI document:** `Microsoft.AspNetCore.OpenApi` version `10.0.15` provides `AddOpenApi()` and `MapOpenApi()`, serving `/openapi/v1.json`.
+- **Interactive UI:** `Swashbuckle.AspNetCore.SwaggerUI` version `10.3.1` provides the UI only; document generation stays with Microsoft's OpenAPI implementation. The local Development URL is `http://localhost:5080/swagger` (redirecting to `/swagger/index.html`).
+- **Exposure:** Both Swagger UI and the OpenAPI document are mapped only when `IsDevelopment()`. `/health` is unaffected. The unauthenticated API is for isolated local demonstration, not public deployment.
+- **Organization:** The five POST routes have the `Task Commands` tag; the two GET routes have the `Task Queries` tag. Endpoints include summaries, descriptions, response status metadata and synthetic request examples.
+- **Demo workflow:** Call the command endpoints in sequence, copying each response's `version` into the next request's `expectedVersion`; use the query endpoints to inspect state and event history. The full lifecycle was verified with HTTP requests against a real Kestrel-hosted API and PostgreSQL; an interactive browser walkthrough inside Swagger UI has not been performed.
+- **Verification and limitations:** Local checks confirmed that Swagger UI and the OpenAPI document load in Development, are absent in Production, and describe all seven routes, tags and response codes. Some request properties, including `expectedVersion`, appear nullable in the generated OpenAPI schema even though the runtime rejects `null`; this is non-blocking schema presentation, not the runtime contract.
+- **Dependencies:** The packages were reviewed for .NET 10 compatibility, provenance, licensing and reported vulnerabilities at implementation time. This minor addition did not require a new ADR. No API-versioning framework, XML-doc pipeline, custom schema filters, authentication UI or code generation was introduced.
 
 ## 8. Local synthetic-demo boundary
 
@@ -168,14 +189,28 @@ This deliberately defers the planned-but-unimplemented authorization of `archite
 
 ## 9. DI and startup strategy
 
-Registered explicitly in `Program.cs` (EVF-33/34), built-in container only, `ValidateOnBuild`/`ValidateScopes` kept:
+Registered explicitly in `Program.cs` (EVF-33/34), using the built-in dependency injection container only. `ValidateOnBuild` and `ValidateScopes` remain enabled:
 
 - `IEventStore` → `PostgreSqlEventStore` (singleton; stateless, depends on the lazily created `PostgreSqlDatabase` singleton).
-- `TaskCommandHandler` → singleton via factory `new TaskCommandHandler(sp.GetRequiredService<IEventStore>(), Guid.NewGuid)` (a `Func<Guid>` parameter is not auto-resolved by the container).
+- `TaskCommandHandler` → singleton via factory `new TaskCommandHandler(sp.GetRequiredService<IEventStore>(), Guid.NewGuid)` (a `Func<Guid>` parameter is not automatically resolved by the container).
 - `TaskQueryHandler` → singleton (stateless).
-- `AddProblemDetails()`, an exception handler returning the safe `internal_error` problem, JSON options (camelCase, unmapped members disallowed), group mapping, and development-only OpenAPI/Swagger UI.
+- `AddProblemDetails()`, an exception handler returning the safe `internal_error` problem, JSON options (camelCase, unmapped members disallowed), Task endpoint group mapping, and Development-only OpenAPI/Swagger UI.
 
-Startup stays possible without credentials: `PostgreSqlDatabase` is created on first resolution, so the host starts, `/health` returns `200`, and only the first workflow request fails (`500 internal_error`, no credentials in the body). `/health` remains process liveness only. `--verify-database` is parsed and removed before host configuration exactly as now, runs before any endpoint is mapped, and its output and exit codes are unchanged. The API never migrates the schema at startup. No hosted service, background worker or extra endpoint is added. To make `Program` testable with `WebApplicationFactory`, EVF-34 needs a `public partial class Program` marker (or `InternalsVisibleTo`) and the `Microsoft.AspNetCore.Mvc.Testing` test package (compatibility, provenance, security and licensing checks required; no ADR solely for it).
+Startup remains possible without database credentials. `PostgreSqlDatabase` is created on first resolution, allowing the host to start and `/health` to return `200`. Without valid database configuration, workflow requests return a safe `500 internal_error` without exposing credentials or connection details.
+
+The `/health` endpoint remains a process-liveness check only.
+
+The `--verify-database` flag is parsed and removed before host configuration, preserving its existing behavior, output, and exit codes. The API does not run database migrations at startup.
+
+No hosted services, background workers, or unnecessary infrastructure components are introduced.
+
+**API integration testing (implemented in EVF-33):**
+
+EVF-33 added `public partial class Program` to support integration testing with `WebApplicationFactory`. The integration test project references `Microsoft.AspNetCore.Mvc.Testing`.
+
+Both changes have been implemented and verified. The package was reviewed for compatibility, provenance, security, and licensing. No separate ADR was required for this minor dependency addition.
+
+EVF-34 reuses the existing API test-host setup for query endpoint tests. No additional test-host infrastructure is required.
 
 ## 10. Verification matrix
 
@@ -185,12 +220,12 @@ PostgreSQL-backed tests follow the existing `PostgresFact` opt-in pattern and is
 | --- | --- | --- |
 | Request DTO validation: missing/negative `expectedVersion`, bad GUID, blank/overlong/control-character ids, bad `outcome`, non-synthetic `artifactRef`, unknown member, malformed JSON, bad correlation header → `400`, no I/O | unit / in-memory API | 33 |
 | Result→HTTP mapping table (every `TaskCommandResult`, every `RejectionCode`, `currentVersion` omitted when `null`, safe bodies) | unit | 33 |
-| Swagger UI at `/swagger` and `/openapi/v1.json` available in Development, absent otherwise; seven routes and two tags present | API integration | 33 |
+| Swagger UI and OpenAPI available in Development, absent in Production; five command routes initially, seven routes and two tags after EVF-34 | API integration | 33–35 |
 | `/health` still `200` without a connection string; `--verify-database` behavior and exit codes unchanged; host starts without credentials | API integration / existing | 33 |
 | Shared fold extraction leaves existing handler tests green | existing unit | 34 |
-| Query handler: missing task, state reconstruction, ordered history, mapped-only `data`, no metadata exposure | unit + PostgreSQL | 34 |
-| Corrupted/unsupported stored events (unknown type, schema v2, malformed payload, gap, invalid sequence) → explicit `500 invalid_event_history`, no partial result, for state, history and commands | unit + PostgreSQL | 34 |
-| Successful lifecycle over HTTP (create→assign→generate→pass→complete) with matching `GET` state and history | API + PostgreSQL | 35 |
+| Query handler: missing task, state reconstruction, ordered history, mapped-only `data`, no metadata exposure | unit + in-memory API | 34 |
+| Corrupted/unsupported stored events (unknown type, schema v2, malformed payload, gap, invalid sequence) → explicit `500 invalid_event_history`, no partial result, for state, history and commands | unit + in-memory API (34); PostgreSQL-backed unsupported-schema case over HTTP (35) | 34, 35 |
+| Successful seven-event HTTP lifecycle (create→assign→generate g1→fail g1→generate g2→pass g2→complete), with matching state and history read back by a fresh host from PostgreSQL | API + PostgreSQL | 35 |
 | Failed generation, then new generation `g2`, passes, completes; completion blocked until `g2` passes | API + PostgreSQL | 35 |
 | Invalid transition (complete without passed test) → `409 workflow_rule_violation`, no new event, version unchanged | API + PostgreSQL | 35 |
 | Stale `expectedVersion` → `409 version_conflict` with `currentVersion`, nothing appended; stale wins over domain rule | API + PostgreSQL | 35 |
@@ -201,21 +236,23 @@ PostgreSQL-backed tests follow the existing `PostgresFact` opt-in pattern and is
 | Unexpected exception → safe `500`, no exception text, SQL or connection string in body | API | 35 |
 | Architecture tests still pass (no ASP.NET/Npgsql in Domain/Application; Npgsql only in Infrastructure) | existing | 33–35 |
 
+**EVF-24 verification evidence (local only):** A Release build completed with 0 warnings and 0 errors. Against an isolated disposable PostgreSQL 17.11 container, 388 tests passed, 0 failed and 0 skipped: 254 unit/architecture tests plus 134 integration tests (including 36 PostgreSQL-category executions). The CI-equivalent non-PostgreSQL filter ran 352 tests with no failures or skips. Without PostgreSQL opt-in, 30 PostgreSQL test cases are reported as skipped; two theories expand into additional data rows when enabled, accounting for the difference between 30 skipped and 36 executed. Remote GitHub Actions results are pending the consolidated pull request.
+
 ## 11. Task 6 compatibility, discrepancies and limitations
 
 **Task 6 compatibility.** `GET /api/tasks/{id}` and its response DTO are the stable contract. In Task 6 only the implementation behind `TaskQueryHandler.GetStateAsync` changes (read `task_overview`: `task_id`, `status`, `assigned_agent_id`, `current_generation_id`, `latest_test_result`, `last_stream_version`); the route, DTO and error mapping stay. The event-history query keeps reading the Event Store. Command contracts do not change; inline projection failure rolls back the append and surfaces as a normal failure (`500`), and success is reported after commit. The Task 5 fold-based state read then serves as an independent reference for projection tests.
 
-**Discrepancies with existing documents:**
+**Documentation reconciliation and remaining deployment limitation:**
 
-1. `architecture.md` Section 5 used to state that `GET /tasks/{id}` reads `task_overview` and "does not deserialize the full event stream on every request". The approved Task 5 design reads the event stream and uses `/api/tasks`. *Resolved in EVF-35:* `architecture.md` and the roadmap now describe the implemented Task 5 read path; Task 6 restores the projection read for state.
-2. `architecture.md` Section 7 expects per-operation authorization at entry points; none exists. *Resolution:* the demo boundary in Section 8, to be re-opened before any shared deployment.
+1. `architecture.md` Section 5 used to state that `GET /tasks/{id}` reads `task_overview` and "does not deserialize the full event stream on every request". The approved Task 5 design reads the event stream and uses `/api/tasks`. **Resolved in EVF-35:** `architecture.md` and the roadmap now describe the implemented Task 5 read path; Task 6 restores the projection read for state.
+2. `architecture.md` Section 7 expects per-operation authorization at entry points; none exists. **Resolution:** the demo boundary in Section 8, to be re-opened before any shared deployment.
 
 **Confirmed owner decisions (no longer pending):**
 
 - The `synthetic://` artifact reference restriction at the API boundary is approved (Section 4).
 - Extracting the existing fold into a small shared Application function in EVF-34 is approved (Section 3).
 - Swagger UI is required and is delivered in EVF-33 (Section 7).
-- New NuGet packages (Swagger UI, `Microsoft.AspNetCore.Mvc.Testing`) require compatibility, provenance, security and licensing checks. No ADR is required solely for minor Swagger UI or API-testing package additions; significant architectural changes still need owner approval and an ADR. `architecture.md` Section 2 lists Npgsql as the only approved production package and should be updated with those packages when they are adopted.
+- The Swagger UI and `Microsoft.AspNetCore.Mvc.Testing` packages were added in EVF-33 after the reported compatibility, provenance, security and licensing review. Their versions and responsibilities are described in Sections 7 and 9. No ADR was required solely for these minor dependency additions; significant architectural changes still require owner approval and an ADR.
 - No dedicated exception or `503` mapping is introduced; unexpected infrastructure failures return `500 internal_error` (Section 5).
 
 **Intentional limitations:** full-stream read per query (no snapshots, pagination or caching); no durable request idempotency, so unknown commit outcomes and retries after lost responses cannot be resolved automatically; no authentication; no API versioning; no online or concurrent-read consistency beyond committed primary-database reads; Swagger UI and OpenAPI are development-only conveniences, not a published API contract.
