@@ -1,4 +1,11 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using EventForge.Api.Tasks;
 using EventForge.Infrastructure.Persistence.PostgreSql;
+using EventForge.Workflow.Application.EventStore;
+using EventForge.Workflow.Application.Tasks;
+using Microsoft.AspNetCore.Http.Json;
+using Microsoft.AspNetCore.Routing;
 
 // Explicit, opt-in database verification: `dotnet run --project src/EventForge.Api -- --verify-database`.
 // The flag is removed before host configuration so it cannot be mistaken for a configuration key.
@@ -21,6 +28,27 @@ builder.Services.AddHealthChecks();
 builder.Services.AddSingleton(services => PostgreSqlDatabase.Create(
     services.GetRequiredService<IConfiguration>().GetConnectionString(PostgreSqlDatabase.ConnectionStringName)));
 
+// Task command API (EVF-33). Both services are cheap to create and hold no request state; the event store only
+// takes the lazily created database singleton, so the host still starts without database credentials.
+builder.Services.AddSingleton<IEventStore, PostgreSqlEventStore>();
+builder.Services.AddSingleton<TaskQueryHandler>();
+builder.Services.AddSingleton(services => new TaskCommandHandler(services.GetRequiredService<IEventStore>(), Guid.NewGuid));
+
+// Unknown request members are rejected (property names stay case-insensitive); unreadable bodies always throw so the
+// exception handler below turns them into Problem Details in every environment.
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+    options.SerializerOptions.NumberHandling = JsonNumberHandling.Strict; // "1" is not an integer
+});
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+builder.Services.AddProblemDetails();
+
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddOpenApi();
+}
+
 var app = builder.Build();
 
 if (verifyDatabase)
@@ -31,7 +59,22 @@ if (verifyDatabase)
     }
 }
 
+app.UseExceptionHandler(errorApp => errorApp.Run(TaskProblems.HandleExceptionAsync));
+
+if (app.Environment.IsDevelopment())
+{
+    // Local demonstration only: the OpenAPI document and Swagger UI are never mapped outside Development.
+    app.MapOpenApi();
+    app.UseSwaggerUI(options =>
+    {
+        options.RoutePrefix = "swagger";
+        options.DocumentTitle = "EventForge Task Workflow API";
+        options.SwaggerEndpoint("/openapi/v1.json", "EventForge API v1");
+    });
+}
+
 app.MapHealthChecks("/health");
+app.MapTaskEndpoints();
 
 app.Run();
 return 0;
@@ -63,3 +106,6 @@ static async Task<int> VerifyDatabaseAsync(IServiceProvider services)
         return 1;
     }
 }
+
+// Lets the integration tests host this application with WebApplicationFactory.
+public partial class Program;

@@ -2,7 +2,7 @@
 
 How to run EventForge in the two supported modes (native development, and a Docker Compose evaluation stack), and how PostgreSQL is configured and provisioned. For what is implemented and verified, see the [README status tables](../README.md#current-implementation); this guide adds no architectural decisions (the Npgsql decision is recorded in [ADR 0001](adr/0001-architecture.md#decision-history)).
 
-> **Status:** PostgreSQL connectivity code, native launch configuration, Docker files and provisioning SQL exist. Mode 2 and the native check against the Compose PostgreSQL were run successfully in an isolated stack (author-reported, not CI). Mode 1: the runtime-role check against the owner's existing PostgreSQL 17.11 on `127.0.0.1:5434` passed (owner-run) and a Visual Studio launch reported `/health` Healthy (owner-reported); the VS Code launch is **not independently verified**. CI for EVF-21 is verified (`main` run: 42 tests passed, 0 failed, 0 skipped, 0 build warnings or errors). EVF-22 adds the event store migration and PostgreSQL integration tests, verified against an isolated disposable PostgreSQL 17 in CI ([PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)); the migration has **not** been run against the owner's development database. No workflow behavior exists, and the API does not use the event store.
+> **Status:** PostgreSQL connectivity code, native launch configuration, Docker files and provisioning SQL exist. Mode 2 and the native check against the Compose PostgreSQL were run successfully in an isolated stack (author-reported, not CI). Mode 1: the runtime-role check against the owner's existing PostgreSQL 17.11 on `127.0.0.1:5434` passed (owner-run) and a Visual Studio launch reported `/health` Healthy (owner-reported); the VS Code launch is **not independently verified**. CI for EVF-21 is verified (`main` run: 42 tests passed, 0 failed, 0 skipped, 0 build warnings or errors). EVF-22 adds the event store migration and PostgreSQL integration tests, verified against an isolated disposable PostgreSQL 17 in CI ([PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)); the migration has **not** been run against the owner's development database. Since EVF-24 the API uses the event store for the local Task workflow routes (see the README section "Task workflow API"); it still never runs migrations, and no projections exist (Task 6).
 
 ## Execution modes
 
@@ -142,7 +142,7 @@ The PostgreSQL check is `pg_isready` over TCP plus a query confirming that schem
    Expected: `PostgreSQL verification: PASSED`, exit code 0. Clear the variable afterwards (`Remove-Item Env:ConnectionStrings__EventForge`).
 4. If something fails, read `docker compose --profile full logs postgres` or `logs api`. Logs must not contain the connection string or passwords; report any occurrence as a defect.
 
-The Compose stack does not run the event store migration (migrations are explicit and owner-run) and no workflow behavior exists, so it demonstrates startup, configuration and provisioning only.
+The Compose stack does not run the event store migration (migrations are explicit and owner-run), so the Task workflow routes cannot persist anything until you run the migration yourself; by default it demonstrates startup, configuration and provisioning. The Task REST API and Swagger UI (Development only) are described in the README section "Task workflow API".
 
 ### Non-destructive shutdown
 
