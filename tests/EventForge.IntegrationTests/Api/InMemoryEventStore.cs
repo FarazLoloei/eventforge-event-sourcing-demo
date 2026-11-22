@@ -71,8 +71,10 @@ public sealed class InMemoryEventStore : IEventStore
         return Task.FromResult(AppendResult.Appended(expectedVersion + events.Count, stored));
     }
 
-    public static StoredEvent Stored(Guid taskId, int version, string type, int schemaVersion, string payloadJson) =>
-        new(Guid.NewGuid(), "Task", taskId, version, type, schemaVersion,
-            JsonDocument.Parse(payloadJson).RootElement.Clone(), JsonDocument.Parse("{}").RootElement.Clone(),
-            DateTimeOffset.UtcNow);
+    public static StoredEvent Stored(
+        Guid taskId, int version, string type, int schemaVersion, string payloadJson, DateTimeOffset? recordedAt = null,
+        string metadataJson = "{}", Guid? eventId = null) =>
+        new(eventId ?? Guid.NewGuid(), "Task", taskId, version, type, schemaVersion,
+            JsonDocument.Parse(payloadJson).RootElement.Clone(), JsonDocument.Parse(metadataJson).RootElement.Clone(),
+            recordedAt ?? DateTimeOffset.UtcNow);
 }

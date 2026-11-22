@@ -31,6 +31,7 @@ builder.Services.AddSingleton(services => PostgreSqlDatabase.Create(
 // Task command API (EVF-33). Both services are cheap to create and hold no request state; the event store only
 // takes the lazily created database singleton, so the host still starts without database credentials.
 builder.Services.AddSingleton<IEventStore, PostgreSqlEventStore>();
+builder.Services.AddSingleton<TaskQueryHandler>();
 builder.Services.AddSingleton(services => new TaskCommandHandler(services.GetRequiredService<IEventStore>(), Guid.NewGuid));
 
 // Unknown request members are rejected (property names stay case-insensitive); unreadable bodies always throw so the
@@ -73,7 +74,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapHealthChecks("/health");
-app.MapTaskCommandEndpoints();
+app.MapTaskEndpoints();
 
 app.Run();
 return 0;

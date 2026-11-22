@@ -4,21 +4,20 @@ using EventForge.Workflow.Domain;
 namespace EventForge.Api.Tasks;
 
 /// <summary>
-/// The Task command endpoints. HTTP is an adapter: it validates request shape, calls the existing
+/// The Task command endpoints (queries are in TaskQueryEndpoints.cs). HTTP is an adapter: it validates request shape, calls the existing
 /// <see cref="TaskCommandHandler"/> once (never retrying) and maps its result. All business rules stay in the aggregate.
 /// </summary>
-public static class TaskEndpoints
+public static partial class TaskEndpoints
 {
     private const string Tag = "Task Commands";
 
     private const string VersionConflictDetail =
         "The task is not at the expected version. Nothing was written. Reload the task and reassess.";
 
-    private const string InvalidHistoryDetail =
-        "The stored event history cannot be read as a valid schema v1 Task history. Nothing was written.";
-
-    public static IEndpointRouteBuilder MapTaskCommandEndpoints(this IEndpointRouteBuilder app)
+    public static IEndpointRouteBuilder MapTaskEndpoints(this IEndpointRouteBuilder app)
     {
+        MapQueries(app);
+
         var group = app.MapGroup("/api/tasks").WithTags(Tag);
 
         group.MapPost("", CreateAsync)
@@ -179,15 +178,8 @@ public static class TaskEndpoints
                 return TaskProblems.Of(
                     StatusCodes.Status409Conflict, "version_conflict", "Version conflict", VersionConflictDetail);
 
-            case InvalidHistory { Position: { } position } history:
-                return TaskProblems.Of(
-                    StatusCodes.Status500InternalServerError, "invalid_event_history", "Invalid event history", InvalidHistoryDetail,
-                    ("reason", history.Reason.ToString()), ("position", position));
-
             case InvalidHistory history:
-                return TaskProblems.Of(
-                    StatusCodes.Status500InternalServerError, "invalid_event_history", "Invalid event history", InvalidHistoryDetail,
-                    ("reason", history.Reason.ToString()));
+                return TaskProblems.InvalidHistory(history.Reason, history.Position);
 
             case DuplicateEventId:
                 return TaskProblems.Of(

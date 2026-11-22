@@ -45,41 +45,14 @@ public sealed class TaskCommandHandler(IEventStore store, Func<Guid> newEventId)
             return new VersionConflict(loaded.Version);
         }
 
-        if (loaded.Events.Count != loaded.Version)
+        // Only after the version check: stale writers get a conflict before any history problem is reported.
+        var fault = TaskHistory.Fold(loaded, out var folded);
+        if (fault is not null)
         {
-            return new InvalidHistory(InvalidHistoryReason.StreamCorrupted, null);
+            return new InvalidHistory(fault.Reason, fault.Position);
         }
 
-        var state = TaskState.Initial;
-        for (var i = 0; i < loaded.Events.Count; i++)
-        {
-            var position = i + 1;
-            var stored = loaded.Events[i];
-            if (stored.StreamVersion != position)
-            {
-                return new InvalidHistory(InvalidHistoryReason.StreamCorrupted, position);
-            }
-
-            // Every event must belong to the requested stream. Together with the mapper's check that
-            // TaskCreated.taskId equals the envelope's stream id, this ties taskId to the requested TaskId.
-            if (stored.StreamType != stream.StreamType || stored.StreamId != stream.StreamId)
-            {
-                return new InvalidHistory(InvalidHistoryReason.InvalidSequence, position);
-            }
-
-            try
-            {
-                state = TaskAggregate.Apply(state, TaskEventMapper.FromStored(stored));
-            }
-            catch (TaskEventMappingException exception)
-            {
-                return new InvalidHistory(exception.Reason, position);
-            }
-            catch (InvalidEventHistoryException)
-            {
-                return new InvalidHistory(InvalidHistoryReason.InvalidSequence, position);
-            }
-        }
+        var state = folded!.State;
 
         var decision = TaskAggregate.Decide(state, command);
         if (decision is Rejected rejected)

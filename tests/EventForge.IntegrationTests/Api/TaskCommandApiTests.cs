@@ -19,27 +19,6 @@ namespace EventForge.IntegrationTests.Api;
 /// </summary>
 public sealed class TaskCommandApiTests
 {
-    private sealed class ApiFactory(string environment = "Development", bool fakeStore = true)
-        : WebApplicationFactory<Program>
-    {
-        public InMemoryEventStore Store { get; } = new();
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment(environment);
-            builder.ConfigureAppConfiguration((_, config) =>
-                config.AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:EventForge"] = string.Empty }));
-            builder.ConfigureTestServices(services =>
-            {
-                if (fakeStore)
-                {
-                    services.RemoveAll<IEventStore>();
-                    services.AddSingleton<IEventStore>(Store);
-                }
-            });
-        }
-    }
-
     private static StringContent Json(string body) => new(body, Encoding.UTF8, "application/json");
 
     private static async Task<JsonElement> ReadAsync(HttpResponseMessage response) =>
@@ -458,15 +437,21 @@ public sealed class TaskCommandApiTests
         Assert.Equal(HttpStatusCode.OK, document.StatusCode);
         var openApi = await ReadAsync(document);
         var paths = openApi.GetProperty("paths");
+        var operations = paths.EnumerateObject()
+            .SelectMany(p => p.Value.EnumerateObject().Select(o => (Route: $"{o.Name.ToUpperInvariant()} {p.Name}", Operation: o.Value)))
+            .ToList();
         Assert.Equal(
-            new[] { "/api/tasks", "/api/tasks/{id}/assign", "/api/tasks/{id}/complete", "/api/tasks/{id}/generations", "/api/tasks/{id}/test-results" },
-            paths.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
-        foreach (var path in paths.EnumerateObject())
+            new[]
+            {
+                "GET /api/tasks/{id}", "GET /api/tasks/{id}/events", "POST /api/tasks", "POST /api/tasks/{id}/assign",
+                "POST /api/tasks/{id}/complete", "POST /api/tasks/{id}/generations", "POST /api/tasks/{id}/test-results",
+            },
+            operations.Select(o => o.Route).Order(StringComparer.Ordinal));
+        foreach (var (route, operation) in operations)
         {
-            var operation = Assert.Single(path.Value.EnumerateObject());
-            Assert.Equal("post", operation.Name);
-            Assert.Equal("Task Commands", operation.Value.GetProperty("tags")[0].GetString());
-            Assert.True(operation.Value.TryGetProperty("summary", out _));
+            var tag = Assert.Single(operation.GetProperty("tags").EnumerateArray()).GetString();
+            Assert.Equal(route.StartsWith("GET", StringComparison.Ordinal) ? "Task Queries" : "Task Commands", tag);
+            Assert.True(operation.TryGetProperty("summary", out _));
         }
     }
 
@@ -479,16 +464,5 @@ public sealed class TaskCommandApiTests
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/swagger/index.html")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/openapi/v1.json")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health")).StatusCode);
-    }
-
-    [Fact]
-    public async Task The_get_routes_belong_to_a_later_task_and_are_not_mapped()
-    {
-        using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-        var id = await CreateAsync(client);
-
-        Assert.True((await client.GetAsync($"/api/tasks/{id}")).StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed);
-        Assert.True((await client.GetAsync($"/api/tasks/{id}/events")).StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed);
     }
 }

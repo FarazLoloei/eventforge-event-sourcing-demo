@@ -1,3 +1,4 @@
+using EventForge.Workflow.Application.Tasks;
 using Microsoft.AspNetCore.Diagnostics;
 
 namespace EventForge.Api.Tasks;
@@ -32,6 +33,16 @@ internal static class TaskProblems
 
     public static IResult Internal() =>
         Of(StatusCodes.Status500InternalServerError, "internal_error", "Internal error", "The request could not be processed.");
+
+    public static IResult InvalidHistory(InvalidHistoryReason reason, int? position)
+    {
+        const string detail = "The stored event history cannot be read as a valid schema v1 Task history. Nothing was written.";
+        return position is { } at
+            ? Of(StatusCodes.Status500InternalServerError, "invalid_event_history", "Invalid event history", detail,
+                ("reason", reason.ToString()), ("position", at))
+            : Of(StatusCodes.Status500InternalServerError, "invalid_event_history", "Invalid event history", detail,
+                ("reason", reason.ToString()));
+    }
 
     /// <summary>Global handler: unreadable request bodies become 400 problems (a wrong content type is answered 415 by the framework itself), everything else a safe 500.</summary>
     public static Task HandleExceptionAsync(HttpContext context)

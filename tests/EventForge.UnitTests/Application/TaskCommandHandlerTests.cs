@@ -334,6 +334,19 @@ public sealed class TaskCommandHandlerTests
         Assert.Equal(0, store.AppendCalls);
     }
 
+    [Fact]
+    public async Task A_stale_expected_version_wins_over_an_unreadable_history()
+    {
+        // The shared history fold runs only after the version check, so a stale writer still gets a conflict.
+        var history = new[] { History(new TaskCreated(T1))[0], Raw(2, "TaskArchived", 1, "{}") };
+        var (handler, store) = Create(history);
+
+        var result = await Run(handler, new CompleteTask(T1), expectedVersion: 1);
+
+        Assert.Equal(new VersionConflict(2), result);
+        Assert.Equal(0, store.AppendCalls);
+    }
+
     // ---- arguments and cancellation ----
 
     [Fact]
