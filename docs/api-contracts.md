@@ -1,6 +1,6 @@
 # EventForge — Task Workflow REST API Contracts (EVF-32)
 
-> **Status: Owner-approved design. Documentation only; implementation pending in EVF-33 to EVF-35.** Nothing in this document is implemented. No endpoint, DTO, handler registration, Swagger/OpenAPI integration or API test exists; `Program.cs` still maps only `/health`. The existing Domain and Application contracts stay authoritative; where this document and the code disagree, the code wins and the gap is listed in [Section 11](#11-task-6-compatibility-discrepancies-and-limitations).
+> **Status: Implemented and verified locally (EVF-33 to EVF-35); remote CI pending.** The seven routes, DTOs, Problem Details mapping, DI registration and Development-only OpenAPI/Swagger UI described below exist in `EventForge.Api`; tests are listed in Section 10 and the evidence is in the README. Implementation notes: request numbers are read strictly (`"1"` is rejected as a non-integer); a wrong content type is answered `415` by the framework with an empty body (not customized); an empty `X-Correlation-Id` header cannot be distinguished from an absent one by the in-memory test host, so only a whitespace-only value is tested. The existing Domain and Application contracts stay authoritative; where this document and the code disagree, the code wins and the gap is listed in [Section 11](#11-task-6-compatibility-discrepancies-and-limitations).
 
 ## 1. Scope and non-goals
 
@@ -205,9 +205,9 @@ PostgreSQL-backed tests follow the existing `PostgresFact` opt-in pattern and is
 
 **Task 6 compatibility.** `GET /api/tasks/{id}` and its response DTO are the stable contract. In Task 6 only the implementation behind `TaskQueryHandler.GetStateAsync` changes (read `task_overview`: `task_id`, `status`, `assigned_agent_id`, `current_generation_id`, `latest_test_result`, `last_stream_version`); the route, DTO and error mapping stay. The event-history query keeps reading the Event Store. Command contracts do not change; inline projection failure rolls back the append and surfaces as a normal failure (`500`), and success is reported after commit. The Task 5 fold-based state read then serves as an independent reference for projection tests.
 
-**Discrepancies with existing documents (no document changed here):**
+**Discrepancies with existing documents:**
 
-1. `architecture.md` Section 5 states `GET /tasks/{id}` reads `task_overview` and "does not deserialize the full event stream on every request", and uses `/tasks` paths. The approved Task 5 design reads the event stream and uses `/api/tasks`. *Smallest resolution:* keep the approved design for Task 5 and update `architecture.md` (and the roadmap Task 5 status) when EVF-33 to EVF-35 are verified; Task 6 restores the projection read for state.
+1. `architecture.md` Section 5 used to state that `GET /tasks/{id}` reads `task_overview` and "does not deserialize the full event stream on every request". The approved Task 5 design reads the event stream and uses `/api/tasks`. *Resolved in EVF-35:* `architecture.md` and the roadmap now describe the implemented Task 5 read path; Task 6 restores the projection read for state.
 2. `architecture.md` Section 7 expects per-operation authorization at entry points; none exists. *Resolution:* the demo boundary in Section 8, to be re-opened before any shared deployment.
 
 **Confirmed owner decisions (no longer pending):**

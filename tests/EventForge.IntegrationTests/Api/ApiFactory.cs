@@ -9,10 +9,12 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace EventForge.IntegrationTests.Api;
 
 /// <summary>
-/// Hosts the API in memory. The connection string is blank, so no database is ever contacted; by default the event
-/// store is replaced with an <see cref="InMemoryEventStore"/>.
+/// Hosts the API in memory. By default the connection string is blank, so no database is ever contacted, and the
+/// event store is replaced with an <see cref="InMemoryEventStore"/>. The PostgreSQL tests pass a real connection
+/// string and keep the real store.
 /// </summary>
-internal sealed class ApiFactory(string environment = "Development", bool fakeStore = true) : WebApplicationFactory<Program>
+internal sealed class ApiFactory(
+    string environment = "Development", bool fakeStore = true, string connectionString = "") : WebApplicationFactory<Program>
 {
     public InMemoryEventStore Store { get; } = new();
 
@@ -20,7 +22,7 @@ internal sealed class ApiFactory(string environment = "Development", bool fakeSt
     {
         builder.UseEnvironment(environment);
         builder.ConfigureAppConfiguration((_, config) =>
-            config.AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:EventForge"] = string.Empty }));
+            config.AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:EventForge"] = connectionString }));
         builder.ConfigureTestServices(services =>
         {
             if (fakeStore)

@@ -2,7 +2,7 @@
 
 > **Status: Foundation, Event Store, pure Task aggregate and Application-level command handling implemented; API integration, composition-root wiring and projections planned**
 >
-> The engineering foundation is implemented and verified: a minimal ASP.NET Core host with a `/health` liveness endpoint (EVF-14), module/adapter project scaffolding (EVF-15; since extended with the Event Store and Domain contracts, with Simulation still empty), static architecture dependency tests (EVF-16), a validated built-in DI composition root with no module services registered (EVF-17), and a baseline GitHub Actions CI workflow (EVF-5) that has run successfully on a pull request and on `main` and whose failure handling and recovery were verified. Also implemented since: the PostgreSQL Event Store with integration tests and a CI job (EVF-22) and the Task domain contracts (EVF-28) and the pure `Decide`/`Apply`/`Rehydrate` aggregate logic (EVF-29), and the Application command handler that persists its events through the Event Store (EVF-30). Everything else in this document (the API and composition-root wiring, projections, replay, upcasting, security controls and the API) is a proposal that does not describe a running system. Decisions are deliberately scoped to a small, auditable proof of concept.
+> The engineering foundation is implemented and verified: a minimal ASP.NET Core host with a `/health` liveness endpoint (EVF-14), module/adapter project scaffolding (EVF-15; since extended with the Event Store and Domain contracts, with Simulation still empty), static architecture dependency tests (EVF-16), a validated built-in DI composition root with no module services registered (EVF-17), and a baseline GitHub Actions CI workflow (EVF-5) that has run successfully on a pull request and on `main` and whose failure handling and recovery were verified. Also implemented since: the PostgreSQL Event Store with integration tests and a CI job (EVF-22) and the Task domain contracts (EVF-28) and the pure `Decide`/`Apply`/`Rehydrate` aggregate logic (EVF-29), the Application command handler that persists its events through the Event Store (EVF-30), and the Task REST API with Swagger UI (EVF-32 to EVF-35; verified locally, queries read the Event Store). Everything else in this document (projections, replay, upcasting and security controls beyond the local demo boundary) is a proposal that does not describe a running system. Decisions are deliberately scoped to a small, auditable proof of concept.
 
 ## 1. Goals, scope, and constraints
 
@@ -104,9 +104,9 @@ Use constructor injection and small application-owned interfaces for persistence
 
 ### Composition root and dependency injection (EVF-17)
 
-**Implemented:** `src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container (no additional container, scanning or service locator). It sets `ValidateOnBuild = true` and `ValidateScopes = true` through `UseDefaultServiceProvider` in every environment, registers `AddHealthChecks()` and (EVF-21) a lazily created singleton `PostgreSqlDatabase`, and maps `/health`. No application, domain or other adapter service is registered, because none exists yet.
+**Implemented:** `src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container (no additional container, scanning or service locator). It sets `ValidateOnBuild = true` and `ValidateScopes = true` through `UseDefaultServiceProvider` in every environment, registers `AddHealthChecks()` and (EVF-21) a lazily created singleton `PostgreSqlDatabase`, and maps `/health`. Since EVF-33/EVF-34 it also registers, as singletons, `IEventStore` (`PostgreSqlEventStore`), `TaskCommandHandler` (event ids from `Guid.NewGuid`) and `TaskQueryHandler`, with Problem Details and strict JSON options, and maps the seven Task routes; the OpenAPI document and Swagger UI are mapped in Development only. The database singleton is still created lazily, so the host starts without credentials.
 
-**Deferred:** Workflow, Infrastructure and Simulation registrations are not implemented. Each will be added explicitly in the API composition root when a concrete service exists, not before. No future service should be assumed to be registered or validated.
+**Deferred:** Simulation registrations are not implemented. Each further service will be added explicitly in the API composition root when a concrete service exists, not before. No future service should be assumed to be registered or validated.
 
 **Policy (applies once services exist):**
 
@@ -206,7 +206,7 @@ The Application layer owns `IEventStore` (`LoadStreamAsync`, `AppendAsync`) and 
 
 - `LoadStream(taskId)` returns events in ascending `stream_version`.
 - A command declares `expectedVersion` (0 for a new stream).
-- If the current stream version differs, the append is rejected. The API will map this to **HTTP 409 Conflict**.
+- If the current stream version differs, the append is rejected. The API maps this to **HTTP 409 Conflict** (`version_conflict`, EVF-33); an unknown `currentVersion` is omitted rather than guessed.
 - A unique database constraint on the stream/version tuple is the final write-race safeguard, even if two writers observed the same old version.
 - For a multi-event command, all appended versions and projection changes succeed or fail **as one PostgreSQL transaction**.
 
@@ -259,7 +259,9 @@ Domain logic is conceptually `Decide(state, command) -> events | error` and `App
 
 ### Read path
 
-`GET /tasks/{id}` (planned) queries the `task_overview` projection; it does not deserialize the full event stream on every request. `GET /tasks/{id}/events` (planned, for inspection/demo) exposes safe, synthetic event metadata. Public API shape remains provisional until the API task is implemented.
+**Implemented (Task 5, EVF-34):** `GET /api/tasks/{id}` and `GET /api/tasks/{id}/events` are served by `TaskQueryHandler`, which loads the committed stream, validates it with the shared `TaskHistory` fold (the same strict mapper and `TaskAggregate.Apply` used by the command handler) and returns the state or the safe, ordered event history; an invalid history fails explicitly with no partial result. The whole stream is read on every request, an intentional small-demo trade-off. See [api-contracts.md](api-contracts.md).
+
+**Planned (Task 6):** `GET /api/tasks/{id}` will query the `task_overview` projection instead of folding the stream; the route and response contract stay the same, and the history endpoint keeps reading the Event Store.
 
 A proposed `task_overview` row contains `task_id`, `status`, `assigned_agent_id`, `current_generation_id`, `latest_test_result`, and `last_stream_version`. The projector is a deterministic reducer. A version guard requires the next contiguous stream version and rejects duplicates or gaps, rolling back the transaction. Rebuilds start each stream at version zero. Task-local projections require no ordering across streams. Success is returned only after commit; immediately consistent reads assume the primary database, not a lagging replica.
 

@@ -10,11 +10,11 @@
 EventForge is an independent portfolio project exploring how **Event Sourcing, CQRS, Domain-Driven Design (DDD) and a Modular Monolith** can provide a reliable foundation for an AI-assisted software development workflow. The planned implementation uses **C# / .NET 10 and PostgreSQL**. AI agents will be **simulated**: the goal is to demonstrate the correctness of the workflow engine, not to integrate an LLM service.
 
 > **Current status: Active development — engineering foundation, Event Store, pure Task aggregate and command handler implemented; API, projections and replay planned.**
-> The repository contains a verified .NET 10 solution, a minimal ASP.NET Core host, Clean Architecture project scaffolding, validated dependency injection, automated architecture dependency tests, a working GitHub Actions baseline CI pipeline and (EVF-21) PostgreSQL connectivity code, native launch configuration, optional Docker files and provisioning SQL. **EventForge is not yet a working workflow engine:** the pure Task aggregate (EVF-28/EVF-29) and the Application command handler that persists its events through the Event Store (EVF-30) exist and are tested locally, but no workflow endpoints, composition-root registration, projections or replay exist. The PostgreSQL event store (EVF-22: append/load with expected-version concurrency, migration and PostgreSQL 17 integration tests) is **implemented and verified in CI** ([PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)); it is used by the EVF-30 Application command handler but not by any API or projection. Per the [verification status](#development-environment-evf-21), the owner's existing PostgreSQL passed an owner-run check, Visual Studio was owner-reported healthy and VS Code launch is not independently verified. Everything under [Why EventForge?](#why-eventforge), [Architecture](#architecture) (planned runtime and lifecycle) and [Roadmap](#roadmap) describes intended design, not delivered functionality.
+> The repository contains a verified .NET 10 solution, a minimal ASP.NET Core host, Clean Architecture project scaffolding, validated dependency injection, automated architecture dependency tests, a working GitHub Actions baseline CI pipeline and (EVF-21) PostgreSQL connectivity code, native launch configuration, optional Docker files and provisioning SQL. **EventForge is not yet a complete workflow engine:** the pure Task aggregate (EVF-28/EVF-29), the Application command handler that persists its events through the Event Store (EVF-30), and (EVF-24, Task 5) a seven-route REST API with Swagger UI for local demonstrations exist and are tested locally; projections, replay and upcasting do not exist. The PostgreSQL event store (EVF-22: append/load with expected-version concurrency, migration and PostgreSQL 17 integration tests) is **implemented and verified in CI** ([PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)); it is used by the EVF-30 command handler and, since EVF-24, by the REST API; no projection uses it. Per the [verification status](#development-environment-evf-21), the owner's existing PostgreSQL passed an owner-run check, Visual Studio was owner-reported healthy and VS Code launch is not independently verified. Everything under [Why EventForge?](#why-eventforge), [Architecture](#architecture) (planned runtime and lifecycle) and [Roadmap](#roadmap) describes intended design, not delivered functionality.
 
 ## Engineering highlights
 
-- **Verified baseline:** .NET 10 SDK pinned by `global.json`; Release build with 0 warnings and 0 errors; 33 passing tests confirmed in GitHub Actions at the EVF-5 baseline (see [Continuous integration](#continuous-integration)) and, after EVF-21, a verified `main` CI run with 42 passing tests, 0 failures, 0 skipped and 0 build warnings or errors. The later EVF-22 CI results are recorded in the Event Store row below. For EVF-23 (Task 4: EVF-28 to EVF-31) the evidence is **local only**, not GitHub CI: Release build with 0 warnings and 0 errors; 235 unit/architecture tests passed; 21 non-database and 31 PostgreSQL integration tests passed (52 in total, 0 failed, 0 skipped) against a disposable PostgreSQL 17 container. Consolidated pull-request CI is pending.
+- **Verified baseline:** .NET 10 SDK pinned by `global.json`; Release build with 0 warnings and 0 errors; 33 passing tests confirmed in GitHub Actions at the EVF-5 baseline (see [Continuous integration](#continuous-integration)) and, after EVF-21, a verified `main` CI run with 42 passing tests, 0 failures, 0 skipped and 0 build warnings or errors. The later EVF-22 CI results are recorded in the Event Store row below. For EVF-23 (Task 4: EVF-28 to EVF-31) the evidence is **local only**, not GitHub CI: Release build with 0 warnings and 0 errors; 235 unit/architecture tests passed; 21 non-database and 31 PostgreSQL integration tests passed (52 in total, 0 failed, 0 skipped) against a disposable PostgreSQL 17 container. Consolidated pull-request CI is pending. EVF-24 (Task 5: EVF-32 to EVF-35) evidence is also **local only**, not GitHub CI: Release build with 0 warnings and 0 errors; the full solution run against a disposable PostgreSQL 17.11 container passed 388 tests (254 unit/architecture and 134 integration, including 36 PostgreSQL tests; 0 failed, 0 skipped). With the CI filter `Category!=PostgreSql` the same build gives 352 passed (254 + 98), and the separate PostgreSQL job's filter selects the 36 PostgreSQL tests. Remote CI for the consolidated pull request has not run.
 - **Architecture enforced by tests:** project references and namespace dependencies are checked from the real `.csproj` files and Roslyn semantic analysis, including fixtures that prove forbidden dependencies are rejected.
 - **Clean Architecture from the first commit:** Workflow owns the domain; HTTP, persistence and simulation are adapters that depend inward.
 - **Fail-closed validation:** built-in DI with `ValidateOnBuild` and `ValidateScopes`; static analysis reports `analysis-incomplete` rather than silently passing.
@@ -29,6 +29,7 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | --- | --- |
 | .NET 10 solution (`EventForge.slnx`) and SDK pin (`global.json`) | Implemented |
 | Minimal ASP.NET Core host (`src/EventForge.Api`) | Implemented |
+| Task workflow REST API (EVF-24 / Task 5: EVF-32 to EVF-35): five command routes and two query routes, Problem Details errors, Development-only OpenAPI and Swagger UI; `TaskQueryHandler` and the shared `TaskHistory` fold in `EventForge.Workflow.Application.Tasks`; DI registration in the composition root; in-memory API tests and PostgreSQL HTTP workflow tests in `tests/EventForge.IntegrationTests/Api` | Implemented; verified locally only (see [Task workflow API](#task-workflow-api-evf-24)); pull-request CI has not run. Queries rebuild state from the Event Store, not from a projection. Local synthetic-data demonstration only: no authentication |
 | `/health` endpoint (process liveness only; no database or dependency checks) | Implemented |
 | Clean Architecture project scaffolding (`Workflow`, `Infrastructure`, `Simulation`) with the project references below | Implemented (`Simulation` is empty; `Workflow` and `Infrastructure` contain only the types listed in this table) |
 | Task domain contracts (EVF-28): strongly typed identifiers (`TaskId`, `AgentId`, `GenerationId`, `ArtifactRef`), initial `TaskState`, six commands, the six approved event definitions with `TaskEventContract` (stream type `Task`, schema version 1), and `Decision`/`RejectionCode` result types in `EventForge.Workflow.Domain`; focused contract tests in `tests/EventForge.UnitTests/Domain` | Implemented (contracts) |
@@ -50,9 +51,8 @@ EventForge is an independent portfolio project exploring how **Event Sourcing, C
 | Area | Status |
 | --- | --- |
 | Projection tables and further migrations | Planned (Task 6; the API never runs migrations at startup). The event store table migration (EVF-22) is implemented, see above |
-| Registering the handler in the composition root, REST command endpoints, mapping results to HTTP responses (e.g. 409), queries | Planned; the command handler exists (EVF-30) but nothing outside tests calls it |
-| Query handlers and REST workflow endpoints | Planned (the Task command handler exists, EVF-30) |
-| Mapping stale expected versions to API responses (HTTP 409) | Planned (Task 5); expected-version concurrency in the event store is implemented (EVF-22) |
+| The `task_overview` read model behind `GET /api/tasks/{id}` | Planned (Task 6). Task 5 answers queries by folding the Event Store history |
+| Durable request idempotency, authentication and authorization | Not implemented; deferred or out of scope for the local demo |
 | Transactional inline projections | Planned |
 | Event versioning and upcasting | Planned |
 | Deterministic replay and projection recovery | Planned |
@@ -84,7 +84,7 @@ These are the actual direct project references; the architecture tests enforce t
 
 ```mermaid
 flowchart TB
-    Api["EventForge.Api<br/>composition root, /health"]
+    Api["EventForge.Api<br/>composition root, /health, Task REST API"]
     Infra["EventForge.Infrastructure<br/>PostgreSQL connectivity and Event Store adapter (Npgsql)"]
     Sim["EventForge.Simulation<br/>(empty scaffolding)"]
     Workflow["EventForge.Workflow<br/>Domain and Application folders<br/>(one assembly; Domain contracts and Event Store contracts)"]
@@ -189,10 +189,10 @@ Events are immutable, versioned facts. Examples and artifact references are synt
 | Area | Technology | Status |
 | --- | --- | --- |
 | Language / runtime | C# / .NET 10 (SDK 10.0.404 pinned) | In use |
-| HTTP | ASP.NET Core | In use (health endpoint only) |
+| HTTP | ASP.NET Core Minimal APIs | In use (health endpoint and the Task workflow API; Swagger UI in Development only) |
 | Tests | xUnit, Roslyn (architecture tests); Domain contract and aggregate tests (EVF-28, EVF-29); PostgreSQL Event Store integration tests (EVF-22) | In use |
 | Continuous integration | GitHub Actions | In use (baseline) |
-| Architecture style | Modular Monolith, DDD, Event Sourcing, CQRS, Clean Architecture | Structure in place; Task aggregate and command workflow implemented (EVF-28 to EVF-30); API, projections, replay and upcasting planned |
+| Architecture style | Modular Monolith, DDD, Event Sourcing, CQRS, Clean Architecture | Structure in place; Task aggregate, command workflow and REST API implemented (EVF-28 to EVF-35); projections, replay and upcasting planned |
 | Primary data store | PostgreSQL 17 (including JSONB event payloads) | Connectivity code and the event store table and adapter (EVF-22); no projection tables yet |
 | Database access | Npgsql 10.0.3, direct parameterized SQL, no ORM | In use (connectivity verification and the Event Store adapter, EVF-22) |
 | Optional local environment | Docker Compose (PostgreSQL 17, API container) | Verified locally in an isolated stack (not CI) |
@@ -201,7 +201,7 @@ Events are immutable, versioned facts. Examples and artifact references are synt
 
 ```text
 src/
-  EventForge.Api/             # Only executable; composition root; /health
+  EventForge.Api/             # Only executable; composition root; /health; Task REST API
   EventForge.Workflow/        # Task Workflow bounded context (one assembly)
     Domain/                   # EventForge.Workflow.Domain (EVF-28 contracts, EVF-29 pure Decide/Apply)
     Application/              # EventForge.Workflow.Application (Event Store contracts, EVF-22)
@@ -254,9 +254,43 @@ dotnet test EventForge.slnx -c Release --no-build --no-restore
 - Host started with `ASPNETCORE_ENVIRONMENT` and `DOTNET_ENVIRONMENT` set to Development (Debug build) and Production (Release build): each logged the matching hosting environment and `GET /health` returned `200 OK` with body `Healthy`. These health checks were manual.
 - A fresh-clone Release build, test run and Production health verification also passed.
 
+## Task workflow API (EVF-24)
+
+**Local, synthetic-data demonstration only.** The API has no authentication or authorization and must not be exposed publicly or deployed on an untrusted or shared network. Use synthetic values only (for example `agent-demo-1`, `g1`, `synthetic://artifacts/demo/g1`). It is not production-ready and does not provide durable request idempotency.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| POST | `/api/tasks` | CreateTask (client-supplied `taskId`; `201 Created`) |
+| POST | `/api/tasks/{id}/assign` | AssignTask |
+| POST | `/api/tasks/{id}/generations` | RecordCodeGenerated |
+| POST | `/api/tasks/{id}/test-results` | RecordTestsPassed / RecordTestsFailed (`outcome`: `passed` or `failed`) |
+| POST | `/api/tasks/{id}/complete` | CompleteTask |
+| GET | `/api/tasks/{id}` | Current state, rebuilt from the event history |
+| GET | `/api/tasks/{id}/events` | Ordered event history (safe event data only; no raw payloads or metadata) |
+
+Every successful command returns exactly `{ "taskId", "version" }`; send `version` as `expectedVersion` on the next command. A stale `expectedVersion` returns `409 version_conflict` and writes nothing; a violated workflow rule returns `409 workflow_rule_violation`. Errors are Problem Details with a stable `code`. The full contract (DTOs, error mapping, limitations) is in [docs/api-contracts.md](docs/api-contracts.md).
+
+**Reads come from event history.** In Task 5, `GET` requests load the committed `Task` stream, validate it through the same strict mapper and fold used by the command handler, and rebuild the state; an invalid or unsupported history fails with `500 invalid_event_history` and no partial result. The whole stream is read on every request (a small-demo trade-off). The transactional `task_overview` projection is **Task 6** and is not implemented.
+
+**Run it.** The workflow routes need an event store: provision PostgreSQL and run `db/migrations/001-create-event-store.sql` as described in [docs/development.md](docs/development.md), and supply `ConnectionStrings:EventForge` (user secrets or `ConnectionStrings__EventForge`). Without it the host still starts and `/health` works, but workflow requests return `500 internal_error`.
+
+```powershell
+dotnet run --project src/EventForge.Api --launch-profile http   # Development, http://localhost:5080
+```
+
+**Swagger UI (Development only):** <http://localhost:5080/swagger>, backed by the OpenAPI document at `http://localhost:5080/openapi/v1.json`. Neither is mapped outside Development. To run the whole workflow in Swagger UI, open the routes under *Task Commands* and *Task Queries* and execute them in this order, copying `version` from each response into the next `expectedVersion`:
+
+1. `POST /api/tasks` with a new GUID as `taskId`, then `POST /api/tasks/{id}/assign` (`expectedVersion` 1, `agentId` `agent-demo-1`).
+2. `POST .../generations` (`expectedVersion` 2, `generationId` `g1`, `artifactRef` `synthetic://artifacts/demo/g1`), then `POST .../test-results` (`expectedVersion` 3, `generationId` `g1`, `outcome` `failed`).
+3. `POST .../complete` (`expectedVersion` 4): expect `409 workflow_rule_violation` (`TestsNotPassed`).
+4. `POST .../generations` (`expectedVersion` 4, `g2`), `POST .../test-results` (`expectedVersion` 5, `g2`, `passed`), `POST .../complete` (`expectedVersion` 6).
+5. `GET /api/tasks/{id}` (status `completed`, version 7) and `GET /api/tasks/{id}/events` (seven ordered events).
+
+**Verification status (local, not remote CI).** The same sequence was run with `curl` against the Kestrel-hosted API and a disposable PostgreSQL 17.11 container, which also served `/swagger/index.html`, `/openapi/v1.json` and `/health` with `200`. Interactively clicking through the Swagger UI pages in a browser was **not** performed; automated tests check that the UI and the seven documented routes are available in Development and absent in Production. Automated coverage: in-memory API tests (validation, error mapping, unknown commit outcome, fail-closed history, OpenAPI) and PostgreSQL HTTP workflow tests (full lifecycle persisted and read back by a fresh host, rejections leave the stream unchanged, concurrent writers with one winner, unsupported stored history, authentication failure without leaks). Not covered: a real unknown-commit outcome against PostgreSQL (a test double covers the mapping), large histories, and anything in Task 6 to Task 8.
+
 ## Dependency injection
 
-`src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container. `ValidateOnBuild` and `ValidateScopes` are enabled explicitly in all environments. The explicit registrations are the health-check infrastructure (`AddHealthChecks()`) and, since EVF-21, a singleton `PostgreSqlDatabase` (one pooled `NpgsqlDataSource`, disposed by the container) created through a factory on first resolution, so the host starts without database credentials. Workflow and Simulation registrations are deferred until real services exist, and nothing for them is registered or validated today. `ValidateOnBuild` does not invoke the factory, so a missing connection string surfaces only when the database is first resolved (for example by `--verify-database`).
+`src/EventForge.Api/Program.cs` is the composition root and uses the built-in ASP.NET Core container. `ValidateOnBuild` and `ValidateScopes` are enabled explicitly in all environments. The explicit registrations are the health-check infrastructure (`AddHealthChecks()`) and, since EVF-21, a singleton `PostgreSqlDatabase` (one pooled `NpgsqlDataSource`, disposed by the container) created through a factory on first resolution, so the host starts without database credentials. Since EVF-33/EVF-34 it also registers `IEventStore` (`PostgreSqlEventStore`), `TaskCommandHandler` (event ids from `Guid.NewGuid`) and `TaskQueryHandler`, all singletons, plus Problem Details and JSON options. Simulation registrations are deferred until a real service exists. `ValidateOnBuild` does not invoke the factory, so a missing connection string surfaces only when the database is first resolved (for example by `--verify-database`).
 
 Policy for future services: concrete services are registered explicitly in the API; Application owns its ports and adapters implement them; services use constructor injection; the domain is independent of the container; singletons must be safe for concurrent use; scoped services use a request or unit-of-work lifetime; circular and captive scoped dependencies are forbidden. Lifetimes are chosen from actual implementations. These options give baseline validation only: they do not guarantee that every runtime dependency path, factory implementation or open generic registration is valid. See [the architecture document](docs/architecture.md#composition-root-and-dependency-injection-evf-17).
 
@@ -391,7 +425,7 @@ The 12 roadmap tasks, milestones and MVP acceptance criteria are preserved in [d
 | 2 | PostgreSQL and Docker configuration | Partially implemented (EVF-21; VS Code launch, provisioning re-run and PR CI not yet verified) |
 | 3 | Event Store implementation | Implemented and verified (EVF-22, [PR #16](https://github.com/FarazLoloei/eventforge-event-sourcing-demo/pull/16)) |
 | 4 | Domain aggregates and event persistence | Implemented locally: Domain contracts (EVF-28), pure `Decide`/`Apply`/`Rehydrate` (EVF-29), and the command handler with schema v1 mapping and PostgreSQL persistence (EVF-30). EVF-31 (scenario verification and documentation) local verification is completed and independently reviewed; consolidated pull-request CI is pending. Inline projections (Task 6) and the API (Task 5) are planned |
-| 5 | CQRS commands and queries | Planned |
+| 5 | CQRS commands and queries | Implemented locally (EVF-32 to EVF-35): five command and two query REST routes, state and history rebuilt from Event Store history, HTTP 409 for stale versions and workflow-rule violations, Swagger UI; PostgreSQL workflow tests passed locally against a disposable PostgreSQL 17; pull-request CI pending. The `task_overview` projection is Task 6 |
 | 6 | Transactional projections | Planned |
 | 7 | Event replay and projection rebuilding | Planned |
 | 8 | Event schema versioning and upcasting | Planned |

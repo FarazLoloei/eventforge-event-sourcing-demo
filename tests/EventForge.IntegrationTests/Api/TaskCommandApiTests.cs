@@ -456,6 +456,54 @@ public sealed class TaskCommandApiTests
     }
 
     [Fact]
+    public async Task The_openapi_document_describes_the_request_and_response_schemas()
+    {
+        using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+
+        var openApi = await ReadAsync(await client.GetAsync("/openapi/v1.json"));
+        var schemas = openApi.GetProperty("components").GetProperty("schemas");
+
+        static string[] Properties(JsonElement schema) =>
+            schema.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(["taskId", "version"], Properties(schemas.GetProperty("TaskCommandResponse")));
+        Assert.Equal(
+            ["assignedAgentId", "currentGenerationId", "currentTestOutcome", "status", "taskId", "version"],
+            Properties(schemas.GetProperty("TaskStateResponse")));
+        Assert.Equal(["events", "taskId", "version"], Properties(schemas.GetProperty("TaskHistoryResponse")));
+        Assert.Equal(
+            ["data", "eventId", "eventType", "recordedAt", "schemaVersion", "streamVersion"],
+            Properties(schemas.GetProperty("TaskEventResponse")));
+        Assert.Equal(["expectedVersion", "generationId", "outcome"], Properties(schemas.GetProperty("RecordTestResultRequest")));
+        Assert.Equal(["artifactRef", "expectedVersion", "generationId"], Properties(schemas.GetProperty("RecordGenerationRequest")));
+    }
+
+    [Fact]
+    public async Task An_unreachable_database_is_a_safe_500_that_leaks_no_connection_details()
+    {
+        using var factory = new ApiFactory(
+            fakeStore: false,
+            connectionString: "Host=127.0.0.1;Port=1;Database=leak-db;Username=leak-user;Password=hunter2;Timeout=2");
+        var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+
+        var write = await client.PostAsync("/api/tasks", Json($$"""{"taskId":"{{id}}"}"""));
+        var read = await client.GetAsync($"/api/tasks/{id}");
+
+        foreach (var response in new[] { write, read })
+        {
+            var text = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            AssertProblem(JsonDocument.Parse(text).RootElement, 500, "internal_error");
+            foreach (var secret in new[] { "hunter2", "leak-user", "leak-db", "127.0.0.1" })
+            {
+                Assert.DoesNotContain(secret, text);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Swagger_ui_and_the_openapi_document_are_not_mapped_outside_development()
     {
         using var factory = new ApiFactory(environment: "Production");
