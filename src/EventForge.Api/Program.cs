@@ -30,6 +30,8 @@ builder.Services.AddSingleton(services => PostgreSqlDatabase.Create(
 
 // Task command API (EVF-33). Both services are cheap to create and hold no request state; the event store only
 // takes the lazily created database singleton, so the host still starts without database credentials.
+// Task appends update the task_overview projection inside PostgreSqlEventStore itself (EVF-37); there is no
+// projection-free configuration to register.
 builder.Services.AddSingleton<IEventStore, PostgreSqlEventStore>();
 builder.Services.AddSingleton<TaskQueryHandler>();
 builder.Services.AddSingleton(services => new TaskCommandHandler(services.GetRequiredService<IEventStore>(), Guid.NewGuid));

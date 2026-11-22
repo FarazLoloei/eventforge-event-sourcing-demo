@@ -1,6 +1,7 @@
 using System.Data;
 using System.Text.Json;
 using EventForge.Workflow.Application.EventStore;
+using EventForge.Workflow.Domain;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -14,8 +15,14 @@ namespace EventForge.Infrastructure.Persistence.PostgreSql;
 /// Append runs in one READ COMMITTED transaction: it reads the stream head, compares it with the expected version,
 /// inserts every event and commits. Writers that both pass the check are separated by the unique
 /// (stream_type, stream_id, stream_version) constraint; the loser is rolled back and reported as a conflict.
-/// There are no advisory locks and no retries. The transaction logic lives in <see cref="AppendCoreAsync"/>
-/// so that a later task can run it inside a transaction shared with a projector.
+/// There are no advisory locks and no retries. The transaction logic lives in <see cref="AppendCoreAsync"/>.
+/// <para>
+/// Task streams are fail-closed: every append to a <c>Task</c> stream also updates <c>task_overview</c> through
+/// <see cref="PostgreSqlTaskOverviewProjector"/>, on the same connection and transaction, after the insert and before the
+/// single COMMIT. A refused or failed projection rolls back the events too, and success is reported only after the
+/// commit. The projector is part of this type, not a configuration option, so no construction path can append Task
+/// events without it. Other stream types are generic and never projected.
+/// </para>
 /// </remarks>
 public sealed class PostgreSqlEventStore(PostgreSqlDatabase database) : IEventStore
 {
@@ -114,6 +121,15 @@ public sealed class PostgreSqlEventStore(PostgreSqlDatabase database) : IEventSt
         if (!result.IsAppended)
         {
             return result; // disposing the uncommitted transaction rolls it back
+        }
+
+        // Inline Task projection on the same connection and transaction. Any exception (a refused projection, a violated
+        // table constraint, cancellation) leaves the scope before COMMIT, so the events are rolled back with it. These
+        // failures are not mapped to a conflict or to an unknown commit: they are definite rollbacks.
+        if (stream.StreamType == TaskEventContract.StreamType)
+        {
+            await PostgreSqlTaskOverviewProjector.ProjectAsync(
+                connection, transaction, stream, expectedVersion, result.Events, cancellationToken);
         }
 
         // Up to here any failure is a definite rollback. Once COMMIT is sent, a lost connection or cancellation
