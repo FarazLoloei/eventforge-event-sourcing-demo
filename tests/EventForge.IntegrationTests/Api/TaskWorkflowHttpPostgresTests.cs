@@ -240,9 +240,10 @@ public sealed class TaskWorkflowHttpPostgresTests(PostgresFixture fixture)
         var id = Guid.NewGuid();
         await SeedAsync(id, 1, "TaskCreated", 2, $$"""{"taskId":"{{id}}","secret":"hunter2"}""");
 
+        // History and commands read the event stream, so they fail strictly. (EVF-38: the state read uses the projection;
+        // this stream has no overview row, so it is refused too, but as a projection fault, never as 404.)
         foreach (var response in new[]
                  {
-                     await GetAsync(client, $"/api/tasks/{id}"),
                      await GetAsync(client, $"/api/tasks/{id}/events"),
                      await PostAsync(client, $"/api/tasks/{id}/assign", """{"expectedVersion":1,"agentId":"a"}"""),
                  })
@@ -254,7 +255,86 @@ public sealed class TaskWorkflowHttpPostgresTests(PostgresFixture fixture)
             Assert.DoesNotContain("hunter2", response.Text);
         }
 
+        var state = await GetAsync(client, $"/api/tasks/{id}");
+        Assert.Equal(HttpStatusCode.InternalServerError, state.Status);
+        Assert.Equal("internal_error", state.Body.GetProperty("code").GetString());
+        Assert.DoesNotContain("hunter2", state.Text);
+
         Assert.Single(await RowsAsync(id));
+    }
+
+    [PostgresFact]
+    public async Task State_is_served_from_the_projection_and_history_stays_strict_when_they_disagree()
+    {
+        using var api = NewApi();
+        var client = api.CreateClient();
+        var id = await CreateAndAssignAsync(client); // events 2, row "assigned|agent-demo-1|-|-|2"
+        var generated = await PostAsync(
+            client, $"/api/tasks/{id}/generations",
+            """{"expectedVersion":2,"generationId":"g1","artifactRef":"synthetic://artifacts/demo/g1"}""");
+        Assert.Equal(HttpStatusCode.OK, generated.Status);
+
+        // A plausible row that no longer matches the events. A state read cannot detect this; it reports the row.
+        await using (var admin = new NpgsqlConnection(fixture.AdminConnectionString(fixture.DatabaseName)))
+        {
+            await admin.OpenAsync();
+            await using var tamper = new NpgsqlCommand(
+                "UPDATE eventforge.task_overview SET assigned_agent_id = 'projected-only' WHERE task_id = @id", admin);
+            tamper.Parameters.Add("id", NpgsqlDbType.Uuid).Value = id;
+            await tamper.ExecuteNonQueryAsync();
+        }
+
+        var state = await GetAsync(client, $"/api/tasks/{id}");
+        var history = await GetAsync(client, $"/api/tasks/{id}/events");
+
+        Assert.Equal("projected-only", state.Body.GetProperty("assignedAgentId").GetString());
+        Assert.Equal(3, state.Body.GetProperty("version").GetInt32());
+        Assert.Equal(3, history.Body.GetProperty("events").GetArrayLength());
+        Assert.Equal("agent-demo-1", history.Body.GetProperty("events")[1].GetProperty("data").GetProperty("agentId").GetString());
+    }
+
+    [PostgresFact]
+    public async Task A_legacy_stream_without_a_row_is_a_safe_500_for_state_never_404_and_is_not_backfilled()
+    {
+        using var api = NewApi();
+        var client = api.CreateClient();
+        var id = Guid.NewGuid();
+        await SeedAsync(id, 1, "TaskCreated", 1, $$"""{"taskId":"{{id}}"}""");
+
+        var state = await GetAsync(client, $"/api/tasks/{id}");
+        var history = await GetAsync(client, $"/api/tasks/{id}/events");
+        var command = await PostAsync(client, $"/api/tasks/{id}/assign", """{"expectedVersion":1,"agentId":"a"}""");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, state.Status);
+        Assert.Equal("internal_error", state.Body.GetProperty("code").GetString());
+        Assert.False(state.Body.TryGetProperty("assignedAgentId", out _));
+        Assert.Equal(HttpStatusCode.OK, history.Status); // the events remain authoritative and readable
+        Assert.Equal(HttpStatusCode.InternalServerError, command.Status); // EVF-37: the write path refuses it too
+        Assert.Single(await RowsAsync(id));
+        Assert.Null(await OverviewAsync(id)); // nothing was backfilled by a read or a refused write
+    }
+
+    [PostgresFact]
+    public async Task An_impossible_overview_row_is_a_safe_500_for_state()
+    {
+        using var api = NewApi();
+        var client = api.CreateClient();
+        var id = await CreateAndAssignAsync(client);
+        await using (var admin = new NpgsqlConnection(fixture.AdminConnectionString(fixture.DatabaseName)))
+        {
+            await admin.OpenAsync();
+            await using var tamper = new NpgsqlCommand(
+                "UPDATE eventforge.task_overview SET status = 'completed', current_generation_id = 'g', " +
+                "latest_test_result = 'passed', last_stream_version = 4 WHERE task_id = @id", admin);
+            tamper.Parameters.Add("id", NpgsqlDbType.Uuid).Value = id;
+            await tamper.ExecuteNonQueryAsync();
+        }
+
+        var state = await GetAsync(client, $"/api/tasks/{id}");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, state.Status);
+        Assert.Equal("internal_error", state.Body.GetProperty("code").GetString());
+        Assert.DoesNotContain("completed", state.Text, StringComparison.OrdinalIgnoreCase);
     }
 
     [PostgresFact]

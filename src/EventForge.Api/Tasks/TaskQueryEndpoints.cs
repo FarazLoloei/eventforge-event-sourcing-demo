@@ -3,7 +3,8 @@ using EventForge.Workflow.Domain;
 
 namespace EventForge.Api.Tasks;
 
-// The two Task query endpoints. They read the committed event history through TaskQueryHandler and never append.
+// The two Task query endpoints through TaskQueryHandler; neither appends. The state query reads the committed task_overview
+// projection (EVF-38); the history query reads and strictly validates the committed event stream.
 public static partial class TaskEndpoints
 {
     private const string QueryTag = "Task Queries";
@@ -15,7 +16,7 @@ public static partial class TaskEndpoints
         group.MapGet("{id}", GetStateAsync)
             .WithName("GetTask")
             .WithSummary("Get the current task state")
-            .WithDescription("Rebuilds the state from the committed event history. Returns status, assigned agent, current generation, current test outcome and the version to use as expectedVersion.")
+            .WithDescription("Reads the committed task_overview projection (not the event stream). Returns status, assigned agent, current generation, current test outcome and the version to use as expectedVersion.")
             .Produces<TaskStateResponse>()
             .ProducesValidationProblem()
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -44,7 +45,7 @@ public static partial class TaskEndpoints
         {
             TaskStateFound found => Results.Ok(ToResponse(found.State)),
             QueryTaskNotFound => TaskProblems.NotFound(),
-            QueryInvalidHistory invalid => TaskProblems.InvalidHistory(invalid.Reason, invalid.Position),
+            QueryProjectionUnavailable => TaskProblems.Internal(), // missing or impossible row: never a 404, no details
             _ => TaskProblems.Internal(),
         };
     }
@@ -67,24 +68,24 @@ public static partial class TaskEndpoints
         };
     }
 
-    private static TaskStateResponse ToResponse(TaskState state) => new(
-        state.Id!.Value,
-        state.Status switch
+    private static TaskStateResponse ToResponse(TaskOverviewRow row) => new(
+        row.TaskId,
+        row.Status switch
         {
             WorkflowStatus.Created => "created",
             WorkflowStatus.Assigned => "assigned",
             WorkflowStatus.Completed => "completed",
             _ => throw new InvalidOperationException("A found task has no status."),
         },
-        state.AssignedAgent?.Value,
-        state.CurrentGeneration?.Value,
-        state.CurrentTestOutcome switch
+        row.AssignedAgentId,
+        row.CurrentGenerationId,
+        row.LatestTestResult switch
         {
             TestOutcome.Passed => "passed",
             TestOutcome.Failed => "failed",
             _ => null,
         },
-        state.Version);
+        row.LastStreamVersion);
 
     private static TaskHistoryResponse ToResponse(TaskHistoryFound found) => new(
         found.TaskId.Value,

@@ -42,7 +42,10 @@ public sealed record TaskCommandResponse(
     [property: Description("The stream version after the command; send it as expectedVersion on the next command.")]
     int Version);
 
-/// <summary>The current task state, reconstructed from the committed event history.</summary>
+/// <summary>
+/// The current task state as committed in the <c>task_overview</c> projection (EVF-38). It mirrors the six projection
+/// columns and is not a Domain <c>TaskState</c> rebuilt from the event history; <c>Version</c> is <c>last_stream_version</c>.
+/// </summary>
 public sealed record TaskStateResponse(
     [property: Description("The task id.")] Guid TaskId,
     [property: Description("created, assigned or completed.")] string Status,

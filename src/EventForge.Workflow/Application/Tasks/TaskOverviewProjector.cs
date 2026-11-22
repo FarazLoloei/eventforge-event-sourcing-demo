@@ -143,13 +143,22 @@ public static class TaskOverviewProjector
         return row!;
     }
 
+    private static void EnsureValid(TaskOverviewRow row)
+    {
+        if (!IsPlausible(row))
+        {
+            throw Fault(TaskOverviewFault.InvalidRow);
+        }
+    }
+
     /// <summary>
-    /// Checks that an existing row is plausible: it satisfies the nullability rules of migration 002 and the minimum
+    /// Whether an existing row is plausible: it satisfies the nullability rules of migration 002 and the minimum
     /// stream version that the shortest valid history reaching that state would have. Every valid history starts
     /// <c>TaskCreated</c> (1), <c>TaskAssigned</c> (2), then at least <c>CodeGenerated</c> (3), a test result (4) and
     /// <c>TaskCompleted</c> (5), so a <c>Created</c> row can only be at version 1, an <c>Assigned</c> row without a
     /// generation only at version 2, with a generation at 3 or more, with a result at 4 or more, and a
-    /// <c>Completed</c> row at 5 or more.
+    /// <c>Completed</c> row at 5 or more. The write-side reducer and projection-backed reads share this check, so both
+    /// refuse the same impossible rows.
     /// </summary>
     /// <remarks>
     /// These checks are necessary, not sufficient. They reject impossible rows, but a row that passes them can still
@@ -158,10 +167,12 @@ public static class TaskOverviewProjector
     /// <see cref="TaskAggregate"/> stays the authority on business rules: this reducer does not re-run its decisions.
     /// Detecting such drift is the job of the later verification and replay work, not of the inline projection.
     /// </remarks>
-    private static void EnsureValid(TaskOverviewRow row)
+    public static bool IsPlausible(TaskOverviewRow row)
     {
+        ArgumentNullException.ThrowIfNull(row);
+
         var version = row.LastStreamVersion;
-        var valid = row.TaskId != Guid.Empty
+        return row.TaskId != Guid.Empty
             && version > 0
             && row.Status switch
             {
@@ -180,11 +191,6 @@ public static class TaskOverviewProjector
                     && version >= 5,
                 _ => false,
             };
-
-        if (!valid)
-        {
-            throw Fault(TaskOverviewFault.InvalidRow);
-        }
     }
 
     private static bool IsCurrentGeneration(TaskOverviewRow row, GenerationId? generationId) =>

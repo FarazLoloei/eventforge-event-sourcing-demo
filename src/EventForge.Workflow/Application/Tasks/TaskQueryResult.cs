@@ -8,8 +8,19 @@ namespace EventForge.Workflow.Application.Tasks;
 /// </summary>
 public abstract record TaskQueryResult;
 
-/// <summary>The folded current state of an existing task.</summary>
-public sealed record TaskStateFound(TaskState State) : TaskQueryResult;
+/// <summary>
+/// The current state of an existing task, as committed in the <c>task_overview</c> projection (not a Domain
+/// <see cref="TaskState"/>: the projection does not hold the aggregate's full state). <c>LastStreamVersion</c> is the
+/// version to use as the expected version of the next command.
+/// </summary>
+public sealed record TaskStateFound(TaskOverviewRow State) : TaskQueryResult;
+
+/// <summary>
+/// The projection cannot answer a state query safely: <see cref="TaskOverviewFault.MissingRow"/> means Task events
+/// exist but no row does (for example a legacy stream), <see cref="TaskOverviewFault.InvalidRow"/> means the row is not
+/// a state any valid history can produce. Never reported as not found and never repaired by a read.
+/// </summary>
+public sealed record QueryProjectionUnavailable(TaskOverviewFault Fault) : TaskQueryResult;
 
 /// <summary>
 /// The validated history of an existing task in ascending stream order. <see cref="Version"/> is the number of events.

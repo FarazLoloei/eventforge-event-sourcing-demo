@@ -33,6 +33,8 @@ builder.Services.AddSingleton(services => PostgreSqlDatabase.Create(
 // Task appends update the task_overview projection inside PostgreSqlEventStore itself (EVF-37); there is no
 // projection-free configuration to register.
 builder.Services.AddSingleton<IEventStore, PostgreSqlEventStore>();
+// State queries read the task_overview projection through the Application port (EVF-38); history reads use the event store.
+builder.Services.AddSingleton<ITaskOverviewReader, PostgreSqlTaskOverviewReader>();
 builder.Services.AddSingleton<TaskQueryHandler>();
 builder.Services.AddSingleton(services => new TaskCommandHandler(services.GetRequiredService<IEventStore>(), Guid.NewGuid));
 

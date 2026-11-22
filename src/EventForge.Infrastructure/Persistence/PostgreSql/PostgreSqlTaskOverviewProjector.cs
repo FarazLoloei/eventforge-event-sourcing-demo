@@ -153,7 +153,7 @@ internal static class PostgreSqlTaskOverviewProjector
         }
     }
 
-    private static WorkflowStatus ParseStatus(string value) => value switch
+    internal static WorkflowStatus ParseStatus(string value) => value switch
     {
         "created" => WorkflowStatus.Created,
         "assigned" => WorkflowStatus.Assigned,
@@ -161,7 +161,7 @@ internal static class PostgreSqlTaskOverviewProjector
         _ => throw new TaskOverviewProjectionException(TaskOverviewFault.InvalidRow),
     };
 
-    private static TestOutcome ParseResult(string value) => value switch
+    internal static TestOutcome ParseResult(string value) => value switch
     {
         "passed" => TestOutcome.Passed,
         "failed" => TestOutcome.Failed,
