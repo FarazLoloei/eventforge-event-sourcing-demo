@@ -12,7 +12,7 @@ public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
 /// <summary>
 /// Creates, inside the isolated PostgreSQL that passed <see cref="PostgresTestGuard"/>, the two EventForge roles
 /// and one throwaway database provisioned like production (schema owned by the migrator, runtime role with
-/// USAGE only), runs the migration once, and removes everything afterwards.
+/// USAGE only), runs the repository migrations once, in order, and removes everything afterwards.
 /// </summary>
 public sealed class PostgresFixture : IAsyncLifetime
 {
@@ -124,12 +124,28 @@ public sealed class PostgresFixture : IAsyncLifetime
     public string ConnectionStringFor(string role, string database) =>
         role == "eventforge_app" ? For(role, _appPassword, database) : For(role, _migratorPassword, database);
 
-    /// <summary>Runs the repository migration file as one command.</summary>
+    public const string EventStoreMigration = "001-create-event-store.sql";
+
+    public const string TaskOverviewMigration = "002-create-task-overview.sql";
+
+    /// <summary>The repository migrations in the order the owner runs them. Deliberately an explicit list.</summary>
+    public static readonly IReadOnlyList<string> Migrations = [EventStoreMigration, TaskOverviewMigration];
+
+    /// <summary>Runs every repository migration in order, each file as one command. The first failure stops the run.</summary>
     public static async Task RunMigrationAsync(string connectionString)
+    {
+        foreach (var migration in Migrations)
+        {
+            await RunMigrationAsync(connectionString, migration);
+        }
+    }
+
+    /// <summary>Runs one repository migration file (a name from <see cref="Migrations"/>) as one command.</summary>
+    public static async Task RunMigrationAsync(string connectionString, string migration)
     {
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
-        await ExecuteAsync(connection, await File.ReadAllTextAsync(MigrationPath()));
+        await ExecuteAsync(connection, await File.ReadAllTextAsync(MigrationPath(migration)));
     }
 
     public static async Task ExecuteAsync(NpgsqlConnection connection, string sql)
@@ -162,17 +178,22 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     private static string RandomSecret() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
 
-    private static string MigrationPath()
+    internal static string MigrationPath(string migration)
     {
+        if (!Migrations.Contains(migration))
+        {
+            throw new ArgumentException("Unknown migration file.", nameof(migration));
+        }
+
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
-            var candidate = Path.Combine(directory.FullName, "db", "migrations", "001-create-event-store.sql");
+            var candidate = Path.Combine(directory.FullName, "db", "migrations", migration);
             if (File.Exists(candidate) && File.Exists(Path.Combine(directory.FullName, "EventForge.slnx")))
             {
                 return candidate;
             }
         }
 
-        throw new FileNotFoundException("db/migrations/001-create-event-store.sql was not found above the test output folder.");
+        throw new FileNotFoundException($"db/migrations/{migration} was not found above the test output folder.");
     }
 }

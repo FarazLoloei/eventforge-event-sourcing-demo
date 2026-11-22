@@ -35,7 +35,8 @@ public sealed class PostgresEventStoreTests(PostgresFixture fixture) : IAsyncLif
         }
     }
 
-    private static StreamKey NewStream(string type = "Task") => new(type, Guid.NewGuid());
+    // A genuine non-Task stream type: Task streams are projected (EVF-37) and only accept valid Task events.
+    private static StreamKey NewStream(string type = "Generic") => new(type, Guid.NewGuid());
 
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 

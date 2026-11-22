@@ -2,12 +2,15 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using EventForge.Workflow.Application.EventStore;
+using EventForge.Workflow.Application.Tasks;
+using EventForge.Workflow.Domain;
 
 namespace EventForge.IntegrationTests.Api;
 
 /// <summary>
-/// EVF-34: the two Task query endpoints over a scripted in-memory event store. No database is contacted. These tests
-/// cover the HTTP contract and fail-closed reads; the full HTTP + PostgreSQL workflow belongs to EVF-35.
+/// The two Task query endpoints over in-memory doubles (EVF-34; EVF-38 moved the state query to the projection). No
+/// database is contacted. These tests cover the HTTP contract and fail-closed reads; the real PostgreSQL projection read
+/// is covered by the PostgreSQL integration tests.
 /// </summary>
 public sealed class TaskQueryApiTests
 {
@@ -68,7 +71,7 @@ public sealed class TaskQueryApiTests
     [InlineData(5, "assigned", "agent-demo-1", "g2", null, 5)] // a new generation reset the failed outcome
     [InlineData(6, "assigned", "agent-demo-1", "g2", "passed", 6)]
     [InlineData(7, "completed", "agent-demo-1", "g2", "passed", 7)]
-    public async Task State_is_reconstructed_from_the_event_history(
+    public async Task State_is_read_from_the_projection_without_loading_the_event_stream(
         int events, string status, string? agent, string? generation, string? outcome, int version)
     {
         using var factory = new ApiFactory();
@@ -89,6 +92,8 @@ public sealed class TaskQueryApiTests
         Assert.Equal(outcome, body.GetProperty("currentTestOutcome").GetString());
         Assert.Equal(version, body.GetProperty("version").GetInt32());
         Assert.Equal(0, factory.Store.AppendCalls);
+        Assert.Equal(0, factory.Store.LoadCalls); // the stream was not loaded to answer a state read
+        Assert.Equal(1, factory.Overview.Calls);
     }
 
     [Fact]
@@ -162,6 +167,7 @@ public sealed class TaskQueryApiTests
         Assert.Equal("invalid_request", body.GetProperty("code").GetString());
         Assert.True(body.GetProperty("errors").TryGetProperty("id", out _));
         Assert.Equal(0, factory.Store.LoadCalls);
+        Assert.Equal(0, factory.Overview.Calls);
     }
 
     public static TheoryData<string, int?> UnreadableHistories() => new()
@@ -177,7 +183,7 @@ public sealed class TaskQueryApiTests
 
     [Theory]
     [MemberData(nameof(UnreadableHistories))]
-    public async Task Unreadable_history_fails_safely_with_no_partial_state_or_events(string kind, int? position)
+    public async Task Unreadable_history_fails_safely_with_no_partial_events(string kind, int? position)
     {
         using var factory = new ApiFactory();
         var client = factory.CreateClient();
@@ -209,7 +215,8 @@ public sealed class TaskQueryApiTests
                 break;
         }
 
-        foreach (var url in new[] { $"/api/tasks/{id}", $"/api/tasks/{id}/events" })
+        // The history endpoint stays authoritative and strict. (The state endpoint no longer reads these events.)
+        foreach (var url in new[] { $"/api/tasks/{id}/events" })
         {
             var (code, text, body) = await GetAsync(client, url);
 
@@ -231,7 +238,9 @@ public sealed class TaskQueryApiTests
     {
         using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        factory.Store.LoadException = new InvalidOperationException("Host=db.internal;Password=hunter2");
+        var failure = new InvalidOperationException("Host=db.internal;Password=hunter2");
+        factory.Store.LoadException = failure; // history reads the event store
+        factory.Overview.FindException = failure; // state reads the projection
         var id = Guid.NewGuid();
 
         foreach (var url in new[] { $"/api/tasks/{id}", $"/api/tasks/{id}/events" })
@@ -266,6 +275,64 @@ public sealed class TaskQueryApiTests
         Assert.Equal(2, state.GetProperty("version").GetInt32());
         Assert.Equal(2, history.GetProperty("events").GetArrayLength());
         Assert.Equal(appendsBefore, factory.Store.AppendCalls);
+    }
+
+    [Fact]
+    public async Task A_stream_without_a_projection_row_is_a_safe_500_for_state_never_404_and_history_still_works()
+    {
+        using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        factory.Store.Seed(id, Lifecycle(id, 3, """{"note":"hunter2"}"""));
+        factory.Overview.Hide(id); // a legacy stream: events exist, the overview row does not
+
+        var (code, text, body) = await GetAsync(client, $"/api/tasks/{id}");
+        Assert.Equal(0, factory.Store.LoadCalls); // answering the state read did not load the stream
+        var history = await GetAsync(client, $"/api/tasks/{id}/events");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, code);
+        Assert.Equal("internal_error", body.GetProperty("code").GetString());
+        Assert.False(body.TryGetProperty("assignedAgentId", out _));
+        Assert.DoesNotContain("hunter2", text);
+        Assert.Equal(HttpStatusCode.OK, history.Status); // the authoritative history is unaffected
+        Assert.Equal(3, history.Body.GetProperty("events").GetArrayLength());
+        Assert.Equal(0, factory.Store.AppendCalls);
+    }
+
+    [Fact]
+    public async Task An_impossible_projection_row_is_a_safe_500_and_is_never_returned_as_state()
+    {
+        using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        factory.Store.Seed(id, Lifecycle(id, 2));
+        factory.Overview.Override(new TaskOverviewRow(id, WorkflowStatus.Completed, "agent-demo-1", "g1", TestOutcome.Passed, 2));
+
+        var (code, text, body) = await GetAsync(client, $"/api/tasks/{id}");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, code);
+        Assert.Equal("internal_error", body.GetProperty("code").GetString());
+        Assert.DoesNotContain("completed", text, StringComparison.OrdinalIgnoreCase);
+        Assert.False(body.TryGetProperty("assignedAgentId", out _));
+    }
+
+    [Fact]
+    public async Task State_reports_the_projection_while_history_reports_the_events()
+    {
+        using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        factory.Store.Seed(id, Lifecycle(id, 4));
+        // A plausible row that differs from the events (a read cannot detect that): the state endpoint reports the row.
+        factory.Overview.Override(new TaskOverviewRow(id, WorkflowStatus.Assigned, "projected-agent", "g9", null, 3));
+
+        var state = await GetAsync(client, $"/api/tasks/{id}");
+        var history = await GetAsync(client, $"/api/tasks/{id}/events");
+
+        Assert.Equal("projected-agent", state.Body.GetProperty("assignedAgentId").GetString());
+        Assert.Equal(3, state.Body.GetProperty("version").GetInt32());
+        Assert.Equal(JsonValueKind.Null, state.Body.GetProperty("currentTestOutcome").ValueKind);
+        Assert.Equal(4, history.Body.GetProperty("version").GetInt32());
     }
 
     private static StringContent Json(string body) => new(body, Encoding.UTF8, "application/json");

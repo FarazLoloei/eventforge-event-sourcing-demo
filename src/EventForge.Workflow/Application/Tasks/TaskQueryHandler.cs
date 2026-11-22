@@ -4,17 +4,42 @@ using EventForge.Workflow.Domain;
 namespace EventForge.Workflow.Application.Tasks;
 
 /// <summary>
-/// Answers Task queries by reading the committed event stream and folding it with the shared
-/// <see cref="TaskHistory"/> logic. Read-only: it never appends events or decides commands. The whole stream is read
-/// and folded on every call (an intentional small-demo trade-off, not optimized for long histories). A fault returns
-/// an explicit result and never a partial state or history.
+/// Answers Task queries. Read-only: it never appends events or decides commands.
+/// <para>
+/// <b>State</b> is read from the committed <c>task_overview</c> projection through <see cref="ITaskOverviewReader"/>;
+/// the event stream is not loaded or folded, so a state read no longer validates historical event payloads. A missing
+/// row is "not found" only when no Task event exists, and an impossible row is refused rather than returned.
+/// </para>
+/// <para>
+/// <b>History</b> stays authoritative and strict: it reads the whole committed stream and folds it with the shared
+/// <see cref="TaskHistory"/> logic, so a corrupt history returns an explicit result and never partial events.
+/// </para>
 /// </summary>
-public sealed class TaskQueryHandler(IEventStore store)
+public sealed class TaskQueryHandler(IEventStore store, ITaskOverviewReader overview)
 {
     public async Task<TaskQueryResult> GetStateAsync(TaskId taskId, CancellationToken cancellationToken)
     {
-        var (failure, _, history) = await LoadAndFoldAsync(taskId, cancellationToken);
-        return failure ?? new TaskStateFound(history!.State);
+        ArgumentNullException.ThrowIfNull(taskId);
+
+        TaskOverviewLookup lookup;
+        try
+        {
+            lookup = await overview.FindAsync(taskId, cancellationToken);
+        }
+        catch (TaskOverviewProjectionException exception) when (exception.Fault == TaskOverviewFault.InvalidRow)
+        {
+            return new QueryProjectionUnavailable(TaskOverviewFault.InvalidRow);
+        }
+
+        return lookup switch
+        {
+            TaskOverviewFound { Row: var row } when row.TaskId == taskId.Value && TaskOverviewProjector.IsPlausible(row) =>
+                new TaskStateFound(row),
+            TaskOverviewFound => new QueryProjectionUnavailable(TaskOverviewFault.InvalidRow),
+            TaskOverviewAbsent { TaskEventsExist: false } => new QueryTaskNotFound(),
+            TaskOverviewAbsent => new QueryProjectionUnavailable(TaskOverviewFault.MissingRow),
+            _ => throw new InvalidOperationException("The overview reader returned an unknown result."),
+        };
     }
 
     public async Task<TaskQueryResult> GetHistoryAsync(TaskId taskId, CancellationToken cancellationToken)

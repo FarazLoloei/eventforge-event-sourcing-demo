@@ -1,6 +1,6 @@
 # EventForge — Task Workflow REST API Contracts (EVF-32)
 
-> **Status: Implemented and verified locally (EVF-33 to EVF-35); remote CI pending.** The seven routes, DTOs, Problem Details mapping, DI registration and Development-only OpenAPI/Swagger UI described below exist in `EventForge.Api`; tests are listed in Section 10 and the evidence is in the README. Implementation notes: request numbers are read strictly (`"1"` is rejected as a non-integer); a wrong content type is answered `415` by the framework with an empty body (not customized); an empty `X-Correlation-Id` header cannot be distinguished from an absent one by the in-memory test host, so only a whitespace-only value is tested. The existing Domain and Application contracts stay authoritative; where this document and the code disagree, the code wins and the gap is listed in [Section 11](#11-task-6-compatibility-discrepancies-and-limitations).
+> **Status: Implemented and verified locally (EVF-33 to EVF-35), then merged in PR #21 with successful GitHub CI (recorded in the README and roadmap). The Task 6 state-query change (EVF-38) is committed locally and has not run in GitHub CI.** The seven routes, DTOs, Problem Details mapping, DI registration and Development-only OpenAPI/Swagger UI described below exist in `EventForge.Api`; tests are listed in Section 10 and the evidence is in the README. Implementation notes: request numbers are read strictly (`"1"` is rejected as a non-integer); a wrong content type is answered `415` by the framework with an empty body (not customized); an empty `X-Correlation-Id` header cannot be distinguished from an absent one by the in-memory test host, so only a whitespace-only value is tested. The existing Domain and Application contracts stay authoritative; where this document and the code disagree, the code wins and the gap is listed in [Section 11](#11-task-6-compatibility-discrepancies-and-limitations).
 
 ## 1. Scope and non-goals
 
@@ -16,11 +16,12 @@
 | --- | --- |
 | `TaskCommand`s `CreateTask`, `AssignTask`, `RecordCodeGenerated`, `RecordTestsPassed`, `RecordTestsFailed`, `CompleteTask` | One command per route (the test-results route chooses Passed/Failed by `outcome`). No new commands. |
 | Value types `TaskId` (non-empty GUID), `AgentId`/`GenerationId` (non-blank, ≤100, no control chars), `ArtifactRef` (≤500, no control chars) | The single source of identifier validation; the API constructs them and maps `ArgumentException` to `400`. |
-| `TaskAggregate.Decide` / `Apply` / `Rehydrate`, `TaskState` | Decisions (via the handler) and state reconstruction for queries. |
+| `TaskAggregate.Decide` / `Apply` / `Rehydrate`, `TaskState` | Decisions (via the handler), command-side state reconstruction and strict history validation. State queries no longer use them: since EVF-38 they read the projection. |
 | `TaskCommandHandler.HandleAsync(command, expectedVersion, correlationId, ct)` | All six commands. |
 | `TaskCommandResult` family: `CommandSucceeded`, `CommandRejected(RejectionCode)`, `VersionConflict(int?)`, `DuplicateEventId`, `InvalidHistory(reason, position?)`, `CommitUnknown` | Mapped 1:1 to HTTP in [Section 5](#5-http-error-and-concurrency-mapping). |
-| `TaskEventMapper.FromStored` (strict schema v1, fail-closed) | Event-history and state reads; no second validator. |
-| `IEventStore.LoadStreamAsync` (throws `EventStreamCorruptedException` on gaps) | Query reads. |
+| `TaskEventMapper.FromStored` (strict schema v1, fail-closed) | Command and event-history reads; no second validator. (State reads use the projection since EVF-38.) |
+| `IEventStore.LoadStreamAsync` (throws `EventStreamCorruptedException` on gaps) | Command and event-history reads. |
+| `ITaskOverviewReader`, `PostgreSqlTaskOverviewReader` (EVF-38, committed locally, not run in GitHub CI) | State query: reads the committed `task_overview` row; probes the event table with `EXISTS` only when no row exists. |
 | `PostgreSqlEventStore`, `PostgreSqlDatabase` | Persistence; `--verify-database`; lazy singleton so startup needs no credentials. |
 | Integration-test patterns (`PostgresFact`, `PostgresFixture`, `TaskWorkflowPostgresTests`) | Existing test patterns reused in EVF-34/35. |
 
@@ -39,11 +40,12 @@ ASP.NET Core 10 **Minimal APIs**, endpoints grouped under `MapGroup("/api/tasks"
 
 ```text
 Command: HTTP endpoint -> request DTO validation -> TaskCommandHandler -> TaskAggregate -> IEventStore -> PostgreSQL
-Query:   HTTP endpoint -> TaskQueryHandler -> IEventStore.LoadStreamAsync -> TaskEventMapper + TaskAggregate.Apply -> response DTO
+State:   HTTP endpoint -> TaskQueryHandler.GetStateAsync -> ITaskOverviewReader -> task_overview (PostgreSQL) -> response DTO
+History: HTTP endpoint -> TaskQueryHandler.GetHistoryAsync -> IEventStore.LoadStreamAsync -> TaskEventMapper + TaskAggregate.Apply -> response DTO
 ```
 
 - **Placement.** `TaskQueryHandler` (implemented in EVF-34) lives in `EventForge.Workflow/Application/Tasks/` next to the command handler and returns Application result types (state, history, `InvalidHistory`, not-found), never HTTP types. Request/response DTOs, route handlers and result-to-HTTP mapping live in `EventForge.Api` (`Tasks/TaskEndpoints.cs`, `Tasks/TaskQueryEndpoints.cs`, `Tasks/TaskContracts.cs`, `Tasks/RequestValidation.cs`, `Tasks/TaskProblems.cs`). Domain and Application reference no ASP.NET Core or Npgsql types (already enforced by the architecture tests).
-- **Reads.** For Task 5, queries rebuild state directly from committed Event Store history on a primary-database read. No projection table is read or written (`task_overview` is Task 6). Queries never bypass the mapper or `Apply`.
+- **Reads.** The history query reads and strictly validates the committed Event Store history on a primary-database read and never bypasses the mapper or `Apply`. Since EVF-38 (Task 6, committed locally, not run in GitHub CI) the state query instead reads the committed `task_overview` projection (Section 6). At Task 5 delivery both queries rebuilt state from the event history.
 - **Writes.** Every state change goes through `TaskCommandHandler`; the simulator will use the same boundary later.
 - **Shared fold (smallest reuse step).** In EVF-34, the command handler's history-validation and folding logic was extracted into the small internal `TaskHistory.Fold` function. Both `TaskCommandHandler` and `TaskQueryHandler` reuse it, so stream identity, event positions, strict mapping and `TaskAggregate.Apply` are checked consistently. The command handler still compares `expectedVersion` before folding. This owner-approved extraction was verified by the existing handler tests and a regression test for stale versions against invalid history.
 
@@ -144,12 +146,13 @@ Errors use RFC 9457 **Problem Details** (`application/problem+json`, `AddProblem
 | `CommandSucceeded` | `201` create / `200` others | — | Response sent after commit only. |
 | Malformed JSON, unknown member, missing/invalid field, bad GUID/`outcome`/`artifactRef`/header | `400` | `invalid_request` | `errors` names fields. Validation (including `expectedVersion` ≥ 0) runs before any I/O. |
 | Wrong content type | `415` | (framework) | Not customized. |
-| Task absent on `GET` | `404` | `task_not_found` | State and history. |
+| Task absent on `GET` | `404` | `task_not_found` | State: neither a `task_overview` row nor any Task event exists. History: the stream has no events. |
 | `CommandRejected(TaskNotFound)` | `404` | `task_not_found` | Only when `expectedVersion` was 0. |
 | `VersionConflict(v)` | `409` | `version_conflict` | `currentVersion = v` only if `v` is not `null`. Client reloads and reassesses; no automatic retry. |
 | `CommandRejected(other)` | `409` | `workflow_rule_violation` | Extension `rule` = stable `RejectionCode` name (e.g. `TestsNotPassed`); no events appended. `TaskAlreadyExists` (reachable at handler level only when `expectedVersion` equals the current version) maps here; through `POST /api/tasks` a duplicate create yields `version_conflict` (see Section 2). |
 | `CommandRejected(TaskIdMismatch)` | `500` | `internal_error` | Cannot happen with route-derived ids unless history is inconsistent; not a client error. |
-| `InvalidHistory(reason, position)`, `EventStreamCorruptedException` on `GET` | `500` | `invalid_event_history` | Safe `reason` (`StreamCorrupted`, `UnknownEventType`, `UnsupportedSchemaVersion`, `MalformedPayload`, `InvalidSequence`) and `position` only; no partial state or history is ever returned. |
+| `InvalidHistory(reason, position)`, `EventStreamCorruptedException` on **history `GET`** and during command processing | `500` | `invalid_event_history` | Detected only by the paths that read and fold the event stream: the history query and commands. State queries no longer read events (EVF-38). Safe `reason` (`StreamCorrupted`, `UnknownEventType`, `UnsupportedSchemaVersion`, `MalformedPayload`, `InvalidSequence`) and `position` only; no partial state or history is ever returned. |
+| Projection fault on **state `GET`** (EVF-38): Task events exist but no `task_overview` row (a legacy stream), an implausible row, or a row of another task | `500` | `internal_error` | Fixed safe body; never `404`; no state is invented and nothing is repaired or backfilled. Not an `invalid_event_history`: the event stream was not read. |
 | `DuplicateEventId` | `500` | `duplicate_event_id` | Server-generated ids make this an internal fault; nothing was written; no automatic retry. |
 | `CommitUnknown` | `500` | `commit_outcome_unknown` | The command may or may not be committed. Detail tells the client to `GET` the task/events and compare `version` before deciding. Never retried by the server; resending is not safe (no idempotency). |
 | Anything else unexpected (including `NpgsqlException`, not-configured connection string, unavailable database) | `500` | `internal_error` | Global exception handler, no exception text in the body; full details only in server logs. |
@@ -160,14 +163,24 @@ Errors use RFC 9457 **Problem Details** (`application/problem+json`, `AddProblem
 
 ## 6. Task state and event-history query approach
 
-`TaskQueryHandler` (implemented in EVF-34) exposes `GetStateAsync` and `GetHistoryAsync` for a `TaskId` and cancellation token:
+`TaskQueryHandler` exposes `GetStateAsync` and `GetHistoryAsync` for a `TaskId` and cancellation token. Since EVF-38 (committed locally, not run in GitHub CI) the two queries have different sources; the routes and response DTOs are unchanged.
+
+**State query (EVF-38): `task_overview` projection.**
+
+1. `ITaskOverviewReader.FindAsync(taskId)` reads one committed row from the primary PostgreSQL database in a single statement (default `READ COMMITTED`: no uncommitted data). Only when no row exists does it ask, with `EXISTS`, whether any `Task` event exists.
+2. A row that belongs to the requested task and passes `TaskOverviewProjector.IsPlausible` becomes the response unchanged: `status`, `assignedAgentId`, `currentGenerationId`, `currentTestOutcome` (from `latest_test_result`) and `version` (from `last_stream_version`). JSON `null` semantics are unchanged.
+3. No row and no events: `404 task_not_found`.
+4. Events but no row (a legacy stream, never repaired or backfilled), or a row that no valid history could produce, or a row for another task: `500 internal_error` with the fixed safe body. It is never reported as `404` and no state is invented. No new error code or status is introduced.
+5. The event stream is neither loaded nor folded, so a state read no longer validates historical event payloads per request. The plausibility checks (see `TaskOverviewProjector.IsPlausible`) are necessary, not sufficient: they do not prove that the row equals the history; replay-based verification is later work.
+
+**History query (unchanged, authoritative and strict).**
 
 1. `LoadStreamAsync(new StreamKey("Task", id))`; `EventStreamCorruptedException` → invalid history.
 2. Version 0 → not found.
 3. Run the **shared fold** (Section 3): count/position/stream-identity checks, `TaskEventMapper.FromStored`, `TaskAggregate.Apply` for **every** event, failing on the first fault.
-4. State query returns the folded `TaskState`; history query pairs each `StoredEvent` envelope (`eventId`, `streamVersion`, `eventType`, `schemaVersion`, `recordedAt`) with its mapped event.
+4. The history query pairs each `StoredEvent` envelope (`eventId`, `streamVersion`, `eventType`, `schemaVersion`, `recordedAt`) with its mapped event.
 
-The history query folds the whole stream even though it only lists events, so an invalid sequence (for example `TaskCompleted` without a passed test) fails explicitly instead of being displayed as if it were fine. Reads use committed primary-database data (immediate local consistency). Reading and folding the full stream on every request is an **intentional small-demo trade-off**: O(n) per request, no snapshots, no pagination, not suitable for large histories.
+The history query folds the whole stream even though it only lists events, so an invalid sequence (for example `TaskCompleted` without a passed test) fails explicitly instead of being displayed as if it were fine. Reading and folding the full stream on every history request is an **intentional small-demo trade-off**: O(n) per request, no snapshots, no pagination, not suitable for large histories. Commands still load and fold the stream; their behavior is unchanged.
 
 ## 7. Swagger UI and OpenAPI approach
 
@@ -223,8 +236,9 @@ PostgreSQL-backed tests follow the existing `PostgresFact` opt-in pattern and is
 | Swagger UI and OpenAPI available in Development, absent in Production; five command routes initially, seven routes and two tags after EVF-34 | API integration | 33–35 |
 | `/health` still `200` without a connection string; `--verify-database` behavior and exit codes unchanged; host starts without credentials | API integration / existing | 33 |
 | Shared fold extraction leaves existing handler tests green | existing unit | 34 |
-| Query handler: missing task, state reconstruction, ordered history, mapped-only `data`, no metadata exposure | unit + in-memory API | 34 |
-| Corrupted/unsupported stored events (unknown type, schema v2, malformed payload, gap, invalid sequence) → explicit `500 invalid_event_history`, no partial result, for state, history and commands | unit + in-memory API (34); PostgreSQL-backed unsupported-schema case over HTTP (35) | 34, 35 |
+| Query handler: missing task, ordered history, mapped-only `data`, no metadata exposure (the state query was a history reconstruction at EVF-34 and reads the projection since EVF-38, see the EVF-38 row) | unit + in-memory API | 34 |
+| Corrupted/unsupported stored events (unknown type, schema v2, malformed payload, gap, invalid sequence) → explicit `500 invalid_event_history`, no partial result, for history and commands (at EVF-34/35 also for state, which has since moved to the projection; see the EVF-38 row) | unit + in-memory API (34); PostgreSQL-backed unsupported-schema case over HTTP (35) | 34, 35 |
+| EVF-38 (committed locally, not run in GitHub CI): state served from the `task_overview` projection without loading the event stream; no row and no events → `404`; events without a row and impossible rows → safe `500 internal_error`, never `404`; committed-only reads; history still strict and independent of the projection | unit + in-memory API + PostgreSQL | 38 |
 | Successful seven-event HTTP lifecycle (create→assign→generate g1→fail g1→generate g2→pass g2→complete), with matching state and history read back by a fresh host from PostgreSQL | API + PostgreSQL | 35 |
 | Failed generation, then new generation `g2`, passes, completes; completion blocked until `g2` passes | API + PostgreSQL | 35 |
 | Invalid transition (complete without passed test) → `409 workflow_rule_violation`, no new event, version unchanged | API + PostgreSQL | 35 |
@@ -236,11 +250,11 @@ PostgreSQL-backed tests follow the existing `PostgresFact` opt-in pattern and is
 | Unexpected exception → safe `500`, no exception text, SQL or connection string in body | API | 35 |
 | Architecture tests still pass (no ASP.NET/Npgsql in Domain/Application; Npgsql only in Infrastructure) | existing | 33–35 |
 
-**EVF-24 verification evidence (local only):** A Release build completed with 0 warnings and 0 errors. Against an isolated disposable PostgreSQL 17.11 container, 388 tests passed, 0 failed and 0 skipped: 254 unit/architecture tests plus 134 integration tests (including 36 PostgreSQL-category executions). The CI-equivalent non-PostgreSQL filter ran 352 tests with no failures or skips. Without PostgreSQL opt-in, 30 PostgreSQL test cases are reported as skipped; two theories expand into additional data rows when enabled, accounting for the difference between 30 skipped and 36 executed. Remote GitHub Actions results are pending the consolidated pull request.
+**EVF-24 verification evidence (local only):** A Release build completed with 0 warnings and 0 errors. Against an isolated disposable PostgreSQL 17.11 container, 388 tests passed, 0 failed and 0 skipped: 254 unit/architecture tests plus 134 integration tests (including 36 PostgreSQL-category executions). The CI-equivalent non-PostgreSQL filter ran 352 tests with no failures or skips. Without PostgreSQL opt-in, 30 PostgreSQL test cases are reported as skipped; two theories expand into additional data rows when enabled, accounting for the difference between 30 skipped and 36 executed. Remote GitHub Actions results were recorded later: PR #21 was merged with successful GitHub CI (388 tests).
 
 ## 11. Task 6 compatibility, discrepancies and limitations
 
-**Task 6 compatibility.** `GET /api/tasks/{id}` and its response DTO are the stable contract. In Task 6 only the implementation behind `TaskQueryHandler.GetStateAsync` changes (read `task_overview`: `task_id`, `status`, `assigned_agent_id`, `current_generation_id`, `latest_test_result`, `last_stream_version`); the route, DTO and error mapping stay. The event-history query keeps reading the Event Store. Command contracts do not change; inline projection failure rolls back the append and surfaces as a normal failure (`500`), and success is reported after commit. The Task 5 fold-based state read then serves as an independent reference for projection tests.
+**Task 6 compatibility.** `GET /api/tasks/{id}` and its response DTO are the stable contract. In Task 6 only the implementation behind `TaskQueryHandler.GetStateAsync` changes (implemented by EVF-38, committed locally, not run in GitHub CI) (read `task_overview`: `task_id`, `status`, `assigned_agent_id`, `current_generation_id`, `latest_test_result`, `last_stream_version`); the route, DTO and error mapping stay. The event-history query keeps reading the Event Store. Command contracts do not change; inline projection failure rolls back the append and surfaces as a normal failure (`500`), and success is reported after commit. Projection tests use `TaskAggregate.Rehydrate` over the committed events as the independent reference. A missing or implausible row maps to the existing `500 internal_error`, so no error mapping changes.
 
 **Documentation reconciliation and remaining deployment limitation:**
 
@@ -255,4 +269,4 @@ PostgreSQL-backed tests follow the existing `PostgresFact` opt-in pattern and is
 - The Swagger UI and `Microsoft.AspNetCore.Mvc.Testing` packages were added in EVF-33 after the reported compatibility, provenance, security and licensing review. Their versions and responsibilities are described in Sections 7 and 9. No ADR was required solely for these minor dependency additions; significant architectural changes still require owner approval and an ADR.
 - No dedicated exception or `503` mapping is introduced; unexpected infrastructure failures return `500 internal_error` (Section 5).
 
-**Intentional limitations:** full-stream read per query (no snapshots, pagination or caching); no durable request idempotency, so unknown commit outcomes and retries after lost responses cannot be resolved automatically; no authentication; no API versioning; no online or concurrent-read consistency beyond committed primary-database reads; Swagger UI and OpenAPI are development-only conveniences, not a published API contract.
+**Intentional limitations:** history queries and command processing read and fold the full event stream (no snapshots, pagination or caching), while state queries read the `task_overview` projection (EVF-38) and do not load the stream; no durable request idempotency, so unknown commit outcomes and retries after lost responses cannot be resolved automatically; no authentication; no API versioning; no online or concurrent-read consistency beyond committed primary-database reads; Swagger UI and OpenAPI are development-only conveniences, not a published API contract.
