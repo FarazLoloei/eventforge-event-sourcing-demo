@@ -292,43 +292,123 @@ An online rebuild would need shadow projections, a **commit-safe** method to cap
 
 ### Event contract changes
 
-Every stored event has `eventType` and `schemaVersion` from the start. In the MVP, explicit **upcasters** will transform old serialized contracts to a canonical in-memory representation without rewriting historical event rows. Contract fixtures and compatibility tests will verify both historical and current versions. Upcasters are pure, deterministic transformations explicitly chained by event type and schema version. Unknown versions or missing steps fail closed. Historical rows remain unchanged. Old/current fixtures must yield equivalent aggregate state and projections. Implementation has not started.
+> **Status: Proposed / Pending Owner Approval (EVF-40, parent EVF-26).** This is a design proposal, not an adopted contract. Nothing below is implemented: the code still writes and reads schema v1 only, and no upcaster, v2 writer or compatibility test exists. Adoption requires explicit project-owner approval and a dated entry in an authorized ADR; EVF-41 (upcaster) and EVF-42 (integration) may start only after that approval. Historical ADR decisions are unchanged.
 
-#### Synthetic example: `CodeGenerated` v1 to v2
+Every stored event has `eventType` and `schemaVersion` from the start. In the MVP, explicit **upcasters** transform old serialized contracts to the current in-memory representation on read, without rewriting historical event rows. Upcasters are pure, deterministic transformations chained explicitly by event type and schema version. Unknown versions or missing steps fail closed.
 
-This illustrative schema evolution renames `artifactRef` to `artifactReference` without changing its meaning. It is a proposed compatibility example, not an existing migration or an adopted production contract. The v1 envelope in section 3 remains a valid historical example.
+#### Proposed change: `CodeGenerated` v1 to v2 (field rename only)
 
-Stored v1 contract (identity and other envelope fields omitted here only for brevity):
+Schema versions are **per event type**. Only `CodeGenerated` evolves; `TaskCreated`, `TaskAssigned`, `TestsPassed`, `TestsFailed` and `TaskCompleted` stay at v1, and there is no global version bump. Event meaning and Domain behavior do not change: `artifactRef` is renamed `artifactReference`, with the same value and the same invariants.
 
-```json
-{
-  "eventType": "CodeGenerated",
-  "schemaVersion": 1,
-  "payload": {
-    "generationId": "g2",
-    "artifactRef": "synthetic://artifacts/task-123/g2"
-  }
-}
-```
+| | Payload (exactly these two properties, both JSON strings) |
+| --- | --- |
+| **v1** (historical, immutable) | `{ "generationId": "g2", "artifactRef": "synthetic://artifacts/g2" }` |
+| **v2** (proposed current) | `{ "generationId": "g2", "artifactReference": "synthetic://artifacts/g2" }` |
 
-Canonical v2 representation in memory:
+The synthetic values are examples only; the envelope in Section 3 remains a valid historical v1 example.
 
-```json
-{
-  "eventType": "CodeGenerated",
-  "schemaVersion": 2,
-  "payload": {
-    "generationId": "g2",
-    "artifactReference": "synthetic://artifacts/task-123/g2"
-  }
-}
-```
+**Compatibility matrix (proposed)**
 
-The pure transformation copies `generationId` unchanged and maps `artifactReference := v1.payload.artifactRef` exactly. It changes only the in-memory schema version and field name, preserving event ID, stream identity/version, metadata, and recorded time. It performs no I/O, clock reads, random generation, artifact lookup, or mutation of its input. Identical valid inputs produce identical outputs. Stored v1 bytes remain unchanged; upcasting never appends a replacement event.
+| Event type | Readable stored versions | Written for new events (after approval and implementation) | Read behavior |
+| --- | --- | --- | --- |
+| `TaskCreated`, `TaskAssigned`, `TestsPassed`, `TestsFailed`, `TaskCompleted` | 1 | 1 | Validate v1 and map. Any other version is unsupported. |
+| `CodeGenerated` | 1, 2 | 2 | v1: validate source, apply the explicit v1-to-v2 step, validate target, map. v2: validate and map directly. Any other version (0, negative, 3 or higher) is unsupported. |
+| Any other `eventType` | none | none | Unknown event type: fail. |
 
-Validate the declared source shape before conversion and the target shape afterward. Missing or malformed required fields fail explicitly; never generate a missing generation ID, infer an artifact, or add an unrecorded timestamp, agent, or test outcome. A future required fact unavailable in old history needs a separately approved compatibility design; an upcaster cannot invent it. In this example the supported reader accepts v1 through the explicit v1-to-v2 step and validates v2 directly. Reject every other version, unknown event type, or missing chain step with event identity and version diagnostics; stop load/replay and leave any rebuild candidate inactive.
+| Reader or writer | v1 `CodeGenerated` | v2 `CodeGenerated` |
+| --- | --- | --- |
+| Current unmodified reader (today's code) | Reads | **Rejects** (`UnsupportedSchemaVersion`) |
+| Proposed reader (EVF-41/42) | Reads through the upcast | Reads directly |
+| Proposed writer | Never writes v1 | Writes v2 |
+| Rewriting stored v1 rows to v2 | Never | n/a |
 
-**Fixture equivalence (planned):** Pair a complete synthetic v1 history containing this event with an otherwise identical history using its v2 representation, preserving envelope identities and stream positions. Both must normalize to the same canonical events and fold to identical aggregate state (including used generation IDs and current test outcome) and all task overview business fields and final stream versions. Check against independently authored expected results at matching history boundaries, including after `g2` clears a prior `g1` pass and after a `g2` result permits completion. Fixtures must also show deterministic repeated conversion, unchanged source data, and explicit failure for malformed payloads, unsupported versions, and missing upcaster steps. These are acceptance requirements, not implemented tests.
+**Forward compatibility is not provided.** Old unmodified application readers cannot read a stream containing a newly written v2 `CodeGenerated`: the strict v1-only mapper rejects it, so history queries and commands on that stream fail with `invalid_event_history`. Rolling back to a binary that predates the reader is unsupported once any v2 event exists. This design offers backward compatibility only (a new reader reads old history), not safe downgrade. The v2-capable reader must be deployed before or together with the v2 writer. For this portfolio MVP, shipping both in one release is acceptable, provided the reader handles v1 and v2 before any v2 event is written. Historical v1 events stay immutable, and no event rewriting or downgrade mechanism is introduced.
+
+#### Three representations, kept distinct
+
+| Layer | What it is | Rules |
+| --- | --- | --- |
+| **Original stored envelope** (`StoredEvent`) | The persisted row: `eventId`, `streamType`, `streamId`, `streamVersion`, `eventType`, `schemaVersion`, `payload` (JSONB), `metadata` (JSONB), `recordedAt`. | Immutable. Read-only input to every conversion. Its `schemaVersion` is the historical fact. |
+| **Normalized in-memory representation** | The same envelope fields with the payload converted to the current contract for its event type (for `CodeGenerated`, the v2 shape). Transient, produced per read. | Never persisted, never returned over HTTP. Copies `eventId`, `streamId`, `streamType`, `streamVersion`, `metadata` and `recordedAt` unchanged and keeps the original `schemaVersion` available for diagnostics and history. Only the payload (and the in-memory target version) change. |
+| **Domain event** (`CodeGenerated(GenerationId, ArtifactRef)`) | The aggregate's fact, with no schema version, JSON or field names. | Unchanged by this design, including the `ArtifactRef` property. `Apply` receives the same Domain event whether the source was v1 or v2. |
+
+The pipeline is: stored envelope, validate source, upcast (v1 only), validate target, map to Domain event, `Apply`. Because the Domain event is identical, aggregate behavior cannot depend on how an event was stored.
+
+#### Upcast and validation rules
+
+The v1-to-v2 step is a pure function: it copies `generationId` unchanged and sets `artifactReference := v1.artifactRef` exactly. It performs no I/O, clock reads, randomness or artifact lookup, does not mutate its input, never appends a replacement event, and yields identical output for identical input. It must not generate a missing generation ID, infer an artifact, or add an unrecorded timestamp, agent or test outcome. A future change that needs a fact absent from old history needs its own approved design.
+
+Validation is strict at both ends and fails closed with no partial result. Reuse the existing `InvalidHistoryReason` values; no new reason or HTTP error code is proposed.
+
+| Condition | Result (existing reason) |
+| --- | --- |
+| Unknown `eventType` | `UnknownEventType` |
+| `schemaVersion` not supported for that type (0, negative, 3+, or 2 for any type other than `CodeGenerated`), or no upcast step to the current version | `UnsupportedSchemaVersion` |
+| Payload not a JSON object | `MalformedPayload` |
+| Missing required property (v1: `artifactRef`; v2: `artifactReference`) | `MalformedPayload` |
+| Extra property, including a v2 payload that still has `artifactRef`, a v1 payload that already has `artifactReference`, or both names | `MalformedPayload` |
+| Property not a JSON string (null, number, object, array, boolean), or wrong-case name | `MalformedPayload` |
+| Blank, overlong or control-character `generationId` / artifact value (Domain value-type rules) | `MalformedPayload` |
+| Upcast output that does not satisfy the v2 shape | `MalformedPayload` (indicates a defect in the step) |
+| Wrong stream type or stream id, non-contiguous versions | `InvalidSequence` / `StreamCorrupted` (unchanged) |
+
+Diagnostics carry only the reason and 1-based position, as today; event ids and versions may appear in restricted operator logs, never in HTTP bodies. Load, command handling and replay stop at the first fault, and a replay candidate stays inactive. The reader applies the Domain value-type rules but not the API-only `synthetic://` pattern, so historical events stay readable. Duplicate JSON keys are not detectable after JSONB storage (Section 3).
+
+Per-event-type versions mean the single global `TaskEventContract.CurrentSchemaVersion` (a documented discrepancy below) must be replaced by an explicit per-type mapping. A generalized upcaster registry, framework or plug-in mechanism is **not** proposed: one explicit step for one event type is enough for this demonstration.
+
+#### Public HTTP compatibility
+
+- Command requests keep `artifactRef` (`POST /api/tasks/{id}/generations`); this design adds no request field, route or status code.
+- `GET /api/tasks/{id}/events` keeps `data.artifactRef` for every `CodeGenerated`, whether stored as v1 or v2. `data` continues to be built from the mapped Domain event, never from the raw payload.
+- The history `schemaVersion` reports the **original stored envelope's** schema version (1 or 2). It describes how the event was stored, not the field naming of the sanitized `data`, so a v2 event appears as `schemaVersion: 2` with `data.artifactRef`. Clients must not infer `data` field names from `schemaVersion`. The code already passes `StoredEvent.SchemaVersion` through; EVF-42 must keep it so.
+- `GET /api/tasks/{id}` is unchanged. `task_overview` has no artifact column, so no migration, projection contract change or rebuild is needed; however, the inline projector maps appended events through the strict v1 mapper today and must use the same normalization reader once new events are written as v2 (EVF-42).
+
+#### Persistence and JSONB
+
+No database migration is proposed: `schema_version` and `payload` already exist, and v2 needs no new column or constraint. PostgreSQL stores `payload` and `metadata` as JSONB, which normalizes key order and whitespace and keeps only the last of duplicate keys, so **byte-for-byte preservation of JSON text is neither provided nor claimed**. Immutability of historical rows is verified by comparing, before and after an upcasting read or replay-style pass, the envelope fields (`event_id`, `stream_type`, `stream_id`, `stream_version`, `event_type`, `schema_version`, `recorded_at`) exactly and `payload` and `metadata` by semantic JSONB equality. Upcasting is read-only (`SELECT`); the planned runtime role has no `UPDATE` or `DELETE` on events (Section 7).
+
+#### Fixture and test plan (acceptance requirements; not implemented)
+
+Use one synthetic lifecycle with independently hand-authored expected values (not computed by the code under test): `TaskCreated`, `TaskAssigned`, `CodeGenerated g1`, `TestsFailed g1`, `CodeGenerated g2`, `TestsPassed g2`, `TaskCompleted` (final stream version 7). Build three histories identical except for the `CodeGenerated` encoding, preserving event ids, stream positions, metadata and `recordedAt`:
+
+1. **v1-only:** both `CodeGenerated` events stored as v1.
+2. **v2-only:** both stored as v2.
+3. **Mixed v1/v2:** `g1` as v1 and `g2` as v2, plus the reverse order (positionally valid; no monotonic-version rule is enforced or claimed).
+
+For each history, assert at these boundaries: after event 3, event 4, event 5, event 6 and event 7. The expected aggregate state at each boundary is the following independent test data, authored by hand and not computed by the production implementation:
+
+| Stream version | Current generation | Used generations | Latest test outcome | Workflow status |
+|---|---|---|---|---|
+| 3 | g1 | {g1} | null | Assigned |
+| 4 | g1 | {g1} | Failed | Assigned |
+| 5 | g2 | {g1, g2} | null | Assigned |
+| 6 | g2 | {g1, g2} | Passed | Assigned |
+| 7 | g2 | {g1, g2} | Passed | Completed |
+
+Assertions:
+
+- **Each `CodeGenerated.ArtifactRef`** equals the expected synthetic value for `g1` and `g2` (for example `synthetic://artifacts/g1` and `synthetic://artifacts/g2`), identical across all three histories.
+- **Complete aggregate state:** status, assigned agent, current generation, set of used generation ids (`g1`, `g2`), current test outcome (cleared after `g2` is generated, `failed` or `passed` as applicable, so completion is blocked until `g2` passes), and version. Final state is completed, current generation `g2`, outcome `passed`, version 7.
+- **All six `task_overview` fields:** `task_id`, `status`, `assigned_agent_id`, `current_generation_id`, `latest_test_result`, `last_stream_version`, with business-field diffs reported per field and not by counts or hashes.
+- **Final stream versions** of the stream and the projection (7).
+- Over HTTP, history `data.artifactRef` is the same for all three and `schemaVersion` is 1 or 2 per stored event.
+
+Further required cases: deterministic repeated conversion; the source envelope and payload not mutated; zero rows rewritten (envelope fields exact, JSONB semantic equality); a new `CodeGenerated` is written as v2 while the other five types remain v1; a rejected command appends nothing; every failure row of the validation table (unsupported versions including 2 for a non-`CodeGenerated` type, unknown type, missing and extra fields, wrong types, blank or overlong values, missing upcast step) fails explicitly with no partial state or history. Existing tests that use schema version 2 as the "unsupported" example for `CodeGenerated` will need review when the contract is adopted; this has not been audited. The old-reader limitation is documented rather than tested, because the repository has no old binary to run. Unit-level fixtures run without PostgreSQL; the projection, row-immutability and HTTP cases need PostgreSQL integration tests.
+
+#### Discrepancies found in the current code (EVF-40 review)
+
+- `TaskEventContract.CurrentSchemaVersion = 1` is one global constant used by the writer (`TaskEventMapper.ToNewEvent`) and the reader (`FromStored`); per-event-type versions need a different shape.
+- `TaskEventMapper.FromStored` is the only reader and rejects every version other than 1; `TaskHistory.Fold` (commands, history) and `PostgreSqlTaskOverviewProjector` (appended events) both call it, so both must move to the normalizing reader together.
+- Doc comments in `TaskEvents.cs` call the Domain records "the in-memory canonical payload for schema version 1"; under this design they stay accurate for fields but not the version wording.
+- The history endpoint already returns the stored `schemaVersion`, so the HTTP requirement above needs no change to its mapping.
+
+#### Decisions requiring project-owner approval
+
+1. Adopt the v1-to-v2 `CodeGenerated` rename and the per-event-type versioning rule, recorded in an authorized ADR with a dated history entry.
+2. Accept that old readers cannot read v2 events, with no downgrade path.
+3. Confirm that new `CodeGenerated` events are written as v2 only when the v1/v2-capable reader is deployed before or together with the writer (EVF-41/42).
+4. Confirm that history `schemaVersion` reports the stored version while `data` keeps `artifactRef`, and that no new `InvalidHistoryReason` or error code is added.
+5. Confirm that no migration, projection rebuild or registry is introduced.
 
 ### Snapshots
 
