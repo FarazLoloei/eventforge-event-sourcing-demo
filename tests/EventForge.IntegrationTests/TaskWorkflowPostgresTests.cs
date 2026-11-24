@@ -76,7 +76,7 @@ public sealed class TaskWorkflowPostgresTests(PostgresFixture fixture) : IAsyncL
     }
 
     [PostgresFact]
-    public async Task A_full_lifecycle_is_persisted_as_schema_v1_events_and_reads_back()
+    public async Task A_full_lifecycle_is_persisted_with_per_type_schema_versions_and_reads_back()
     {
         var task = NewTask();
         var handler = NewHandler();
@@ -104,13 +104,15 @@ public sealed class TaskWorkflowPostgresTests(PostgresFixture fixture) : IAsyncL
         Assert.Equal(
             ["TaskCreated", "TaskAssigned", "CodeGenerated", "TestsPassed", "TaskCompleted"],
             loaded.Events.Select(e => e.EventType));
-        Assert.All(loaded.Events, e => Assert.Equal(1, e.SchemaVersion));
+        // Per-event-type versions: CodeGenerated is written as v2, every other event as v1.
+        Assert.Equal([1, 1, 2, 1, 1], loaded.Events.Select(e => e.SchemaVersion));
         Assert.Equal("it-run", loaded.Events[0].Metadata.GetProperty("correlationId").GetString());
 
         // PostgreSQL JSONB normalises the payload, so compare values, not text.
         var generated = loaded.Events[2].Payload;
         Assert.Equal("g1", generated.GetProperty("generationId").GetString());
-        Assert.Equal("synthetic://artifacts/it/g1", generated.GetProperty("artifactRef").GetString());
+        Assert.Equal("synthetic://artifacts/it/g1", generated.GetProperty("artifactReference").GetString());
+        Assert.False(generated.TryGetProperty("artifactRef", out _));
 
         var state = TaskAggregate.Rehydrate(loaded.Events.Select(TaskEventMapper.FromStored));
         Assert.Equal(WorkflowStatus.Completed, state.Status);

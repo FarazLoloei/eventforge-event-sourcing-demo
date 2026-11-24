@@ -187,13 +187,12 @@ public sealed class CodeGeneratedUpcasterTests
     }
 
     [Fact]
-    public void The_current_runtime_mapper_still_reads_v1_only()
+    public void The_runtime_mapper_reads_v1_and_v2_through_the_upcaster_to_the_same_domain_event()
     {
-        // EVF-41 does not wire the upcaster in: runtime behavior stays schema v1 until EVF-42.
-        var v1 = TaskEventMapper.FromStored(Generated(1, V1));
-        Assert.IsType<CodeGenerated>(v1);
+        // EVF-42: TaskEventMapper.FromStored (used by the history fold, the handlers and the projector) delegates here.
+        var expected = new CodeGenerated(new GenerationId("g2"), new ArtifactRef("synthetic://artifacts/g2"));
 
-        var exception = Assert.Throws<TaskEventMappingException>(() => TaskEventMapper.FromStored(Generated(2, V2)));
-        Assert.Equal(InvalidHistoryReason.UnsupportedSchemaVersion, exception.Reason);
+        Assert.Equal(expected, TaskEventMapper.FromStored(Generated(1, V1)));
+        Assert.Equal(expected, TaskEventMapper.FromStored(Generated(2, V2)));
     }
 }

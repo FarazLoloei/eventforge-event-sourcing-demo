@@ -5,7 +5,7 @@ using EventForge.Workflow.Domain;
 
 namespace EventForge.Workflow.Application.Tasks;
 
-/// <summary>A stored event cannot be mapped to a schema v1 Task event. The message contains only the reason.</summary>
+/// <summary>A stored event is not a valid, supported Task event schema. The message contains only the reason.</summary>
 public sealed class TaskEventMappingException(InvalidHistoryReason reason)
     : Exception($"A stored Task event could not be mapped ({reason}).")
 {
@@ -13,10 +13,11 @@ public sealed class TaskEventMappingException(InvalidHistoryReason reason)
 }
 
 /// <summary>
-/// Explicit, pure mapping between Domain events and Event Store envelopes for schema version 1.
-/// Payload properties are camelCase and written in a fixed order; a task id is the canonical lowercase "D" GUID.
-/// Reading is strict: unknown event types, other schema versions, missing or extra properties and non-string
-/// values are rejected, because an additive change requires a new schema version. No upcasting exists yet.
+/// Explicit, pure mapping between Domain events and Event Store envelopes. Schema versions are per event type:
+/// <c>CodeGenerated</c> is written as v2 and read as v1 (through <see cref="CodeGeneratedUpcaster"/>) or v2; every other
+/// Task event is written and read as v1. Payload properties are camelCase and written in a fixed order; a task id is
+/// the canonical lowercase "D" GUID. Reading is strict: unknown event types, unsupported schema versions, missing or
+/// extra properties and non-string values are rejected, because a payload change requires a new schema version.
 /// </summary>
 public static class TaskEventMapper
 {
@@ -30,17 +31,20 @@ public static class TaskEventMapper
             TaskAssigned e => (TaskEventContract.TaskAssigned, Payload(("agentId", e.AgentId.Value))),
             CodeGenerated e => (
                 TaskEventContract.CodeGenerated,
-                Payload(("generationId", e.GenerationId.Value), ("artifactRef", e.ArtifactRef.Value))),
+                Payload(("generationId", e.GenerationId.Value), ("artifactReference", e.ArtifactRef.Value))),
             TestsPassed e => (TaskEventContract.TestsPassed, Payload(("generationId", e.GenerationId.Value))),
             TestsFailed e => (TaskEventContract.TestsFailed, Payload(("generationId", e.GenerationId.Value))),
             TaskCompleted => (TaskEventContract.TaskCompleted, Payload()),
             _ => throw new ArgumentException("The event type is not supported.", nameof(@event)),
         };
 
-        return new NewEvent(eventId, eventType, TaskEventContract.CurrentSchemaVersion, payload, metadata);
+        return new NewEvent(eventId, eventType, TaskEventContract.CurrentSchemaVersionOf(eventType), payload, metadata);
     }
 
-    /// <exception cref="TaskEventMappingException">The envelope is not a valid schema v1 Task event.</exception>
+    /// <exception cref="TaskEventMappingException">
+    /// The envelope is not a valid supported Task event: <c>CodeGenerated</c> schema v1 or v2, or schema v1 for every
+    /// other Task event.
+    /// </exception>
     public static TaskEvent FromStored(StoredEvent stored)
     {
         ArgumentNullException.ThrowIfNull(stored);
@@ -55,7 +59,10 @@ public static class TaskEventMapper
             throw new TaskEventMappingException(InvalidHistoryReason.UnknownEventType);
         }
 
-        if (stored.SchemaVersion != TaskEventContract.CurrentSchemaVersion)
+        // CodeGenerated reads schema v1 (through the explicit upcast) and v2; the upcaster rejects any other version.
+        // Every other event type reads exactly schema v1.
+        if (stored.EventType != TaskEventContract.CodeGenerated
+            && stored.SchemaVersion != TaskEventContract.InitialSchemaVersion)
         {
             throw new TaskEventMappingException(InvalidHistoryReason.UnsupportedSchemaVersion);
         }
@@ -66,7 +73,7 @@ public static class TaskEventMapper
             {
                 TaskEventContract.TaskCreated => ReadCreated(stored),
                 TaskEventContract.TaskAssigned => new TaskAssigned(new AgentId(Read(stored.Payload, "agentId")[0])),
-                TaskEventContract.CodeGenerated => ReadGenerated(stored.Payload),
+                TaskEventContract.CodeGenerated => CodeGeneratedUpcaster.ToDomainEvent(CodeGeneratedUpcaster.Normalize(stored)),
                 TaskEventContract.TestsPassed => new TestsPassed(new GenerationId(Read(stored.Payload, "generationId")[0])),
                 TaskEventContract.TestsFailed => new TestsFailed(new GenerationId(Read(stored.Payload, "generationId")[0])),
                 _ => ReadCompleted(stored.Payload),
@@ -101,12 +108,6 @@ public static class TaskEventMapper
         }
 
         return new TaskCreated(new TaskId(id));
-    }
-
-    private static CodeGenerated ReadGenerated(JsonElement payload)
-    {
-        var values = Read(payload, "generationId", "artifactRef");
-        return new CodeGenerated(new GenerationId(values[0]), new ArtifactRef(values[1]));
     }
 
     private static TaskCompleted ReadCompleted(JsonElement payload)

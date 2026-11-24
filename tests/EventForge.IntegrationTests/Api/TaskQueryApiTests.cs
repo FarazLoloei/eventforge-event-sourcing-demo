@@ -24,21 +24,27 @@ public sealed class TaskQueryApiTests
     }
 
     /// <summary>The seven-event happy history; event n has a fixed id and is recorded n-1 minutes after the start.</summary>
-    private static StoredEvent[] Lifecycle(Guid id, int count, string metadata = "{}")
+    private static StoredEvent[] Lifecycle(
+        Guid id, int count, string metadata = "{}", int firstGenerationVersion = 1, int secondGenerationVersion = 1)
     {
-        (string Type, string Payload)[] all =
+        // CodeGenerated v1 stores artifactRef, v2 stores artifactReference; every other event is schema v1.
+        static string Generated(string generation, int schemaVersion) => schemaVersion == 1
+            ? $$"""{"generationId":"{{generation}}","artifactRef":"synthetic://artifacts/demo/{{generation}}"}"""
+            : $$"""{"generationId":"{{generation}}","artifactReference":"synthetic://artifacts/demo/{{generation}}"}""";
+
+        (string Type, int Version, string Payload)[] all =
         [
-            ("TaskCreated", $$"""{"taskId":"{{id}}"}"""),
-            ("TaskAssigned", """{"agentId":"agent-demo-1"}"""),
-            ("CodeGenerated", """{"generationId":"g1","artifactRef":"synthetic://artifacts/demo/g1"}"""),
-            ("TestsFailed", """{"generationId":"g1"}"""),
-            ("CodeGenerated", """{"generationId":"g2","artifactRef":"synthetic://artifacts/demo/g2"}"""),
-            ("TestsPassed", """{"generationId":"g2"}"""),
-            ("TaskCompleted", "{}"),
+            ("TaskCreated", 1, $$"""{"taskId":"{{id}}"}"""),
+            ("TaskAssigned", 1, """{"agentId":"agent-demo-1"}"""),
+            ("CodeGenerated", firstGenerationVersion, Generated("g1", firstGenerationVersion)),
+            ("TestsFailed", 1, """{"generationId":"g1"}"""),
+            ("CodeGenerated", secondGenerationVersion, Generated("g2", secondGenerationVersion)),
+            ("TestsPassed", 1, """{"generationId":"g2"}"""),
+            ("TaskCompleted", 1, "{}"),
         ];
         return all.Take(count)
             .Select((e, i) => InMemoryEventStore.Stored(
-                id, i + 1, e.Type, 1, e.Payload, Start.AddMinutes(i), metadata, EventId(i + 1)))
+                id, i + 1, e.Type, e.Version, e.Payload, Start.AddMinutes(i), metadata, EventId(i + 1)))
             .ToArray();
     }
 
@@ -128,6 +134,45 @@ public sealed class TaskQueryApiTests
         Assert.Equal("""{"generationId":"g2"}""", events[5].GetProperty("data").GetRawText());
         Assert.Equal("{}", events[6].GetProperty("data").GetRawText());
         Assert.Equal(0, factory.Store.AppendCalls);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    [InlineData(1, 2)]
+    [InlineData(2, 1)]
+    public async Task History_returns_the_stored_schema_version_but_always_the_sanitized_artifactRef(int first, int second)
+    {
+        using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        factory.Store.Seed(id, Lifecycle(id, 7, firstGenerationVersion: first, secondGenerationVersion: second));
+
+        var (code, text, body) = await GetAsync(client, $"/api/tasks/{id}/events");
+
+        Assert.Equal(HttpStatusCode.OK, code);
+        var events = body.GetProperty("events").EnumerateArray().ToList();
+        Assert.Equal([1, 1, first, 1, second, 1, 1], events.Select(e => e.GetProperty("schemaVersion").GetInt32()));
+        Assert.Equal("""{"generationId":"g1","artifactRef":"synthetic://artifacts/demo/g1"}""", events[2].GetProperty("data").GetRawText());
+        Assert.Equal("""{"generationId":"g2","artifactRef":"synthetic://artifacts/demo/g2"}""", events[4].GetProperty("data").GetRawText());
+        Assert.DoesNotContain("artifactReference", text);
+        Assert.Equal(7, body.GetProperty("version").GetInt32());
+    }
+
+    [Fact]
+    public async Task An_unsupported_CodeGenerated_version_fails_the_history_explicitly_with_no_events()
+    {
+        using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        factory.Store.Seed(id, Lifecycle(id, 7, firstGenerationVersion: 3));
+
+        var (code, _, body) = await GetAsync(client, $"/api/tasks/{id}/events");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, code);
+        Assert.Equal("invalid_event_history", body.GetProperty("code").GetString());
+        Assert.Equal("UnsupportedSchemaVersion", body.GetProperty("reason").GetString());
+        Assert.False(body.TryGetProperty("events", out _));
     }
 
     [Fact]

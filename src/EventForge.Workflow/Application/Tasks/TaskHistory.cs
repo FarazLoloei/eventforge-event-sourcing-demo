@@ -3,7 +3,7 @@ using EventForge.Workflow.Domain;
 
 namespace EventForge.Workflow.Application.Tasks;
 
-/// <summary>A loaded stream that is a valid schema v1 Task history: the mapped events and the folded state.</summary>
+/// <summary>A loaded stream that is a valid schema-aware Task history: the mapped events and the folded state.</summary>
 internal sealed record FoldedHistory(TaskState State, IReadOnlyList<TaskEvent> Events);
 
 /// <summary>Why a loaded stream is not a valid Task history. <see cref="Position"/> is 1-based when known.</summary>
@@ -11,7 +11,7 @@ internal sealed record HistoryFault(InvalidHistoryReason Reason, int? Position);
 
 /// <summary>
 /// The one place that validates and folds a loaded Task stream, shared by the command and query handlers: event
-/// count and positions, stream identity, strict schema v1 mapping and <see cref="TaskAggregate.Apply"/>. It performs
+/// count and positions, stream identity, strict, schema-aware mapping (CodeGenerated v1 is upcast, v2 read directly) and <see cref="TaskAggregate.Apply"/>. It performs
 /// no I/O and stops at the first fault, so callers never see a partially validated history.
 /// </summary>
 internal static class TaskHistory

@@ -12,7 +12,8 @@ public sealed class DomainContractTests
     public void Contract_uses_the_approved_names_and_schema_version()
     {
         Assert.Equal("Task", TaskEventContract.StreamType);
-        Assert.Equal(1, TaskEventContract.CurrentSchemaVersion);
+        Assert.Equal(1, TaskEventContract.InitialSchemaVersion);
+        Assert.Equal(2, TaskEventContract.CodeGeneratedSchemaVersion);
         Assert.Equal(
             ApprovedEventNames.Order(StringComparer.Ordinal),
             new[]
