@@ -8,7 +8,7 @@ namespace EventForge.Infrastructure.Persistence.PostgreSql;
 
 /// <summary>
 /// Keeps <c>eventforge.task_overview</c> (migration 002) in step with the Task event stream, on the transaction of the
-/// append that produced the events. It maps the stored schema v1 events, reads the task's current row, folds the batch
+/// append that produced the events. It maps the stored events through the schema-aware <see cref="TaskEventMapper"/> (CodeGenerated v1 or v2, other events v1), reads the task's current row, folds the batch
 /// with the pure <see cref="TaskOverviewProjector"/> and writes the result: an <c>INSERT</c> for a new task, otherwise an
 /// <c>UPDATE</c> guarded by the version that was read. It never replays or backfills: a continuing stream without a row
 /// is refused, which rolls back the append. Internal to Infrastructure: only <see cref="PostgreSqlEventStore"/> calls it,

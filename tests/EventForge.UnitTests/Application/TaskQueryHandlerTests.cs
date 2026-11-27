@@ -181,11 +181,28 @@ public sealed class TaskQueryHandlerTests
         Assert.Equal(stored.Select(e => e.EventId), found.Events.Select(e => e.EventId));
         Assert.Equal([1, 2, 3], found.Events.Select(e => e.StreamVersion));
         Assert.Equal(["TaskCreated", "TaskAssigned", "CodeGenerated"], found.Events.Select(e => e.EventType));
-        Assert.All(found.Events, e => Assert.Equal(1, e.SchemaVersion));
+        // The stored envelope's schema version is reported: CodeGenerated is now written as v2, the rest as v1.
+        Assert.Equal([1, 1, 2], found.Events.Select(e => e.SchemaVersion));
         Assert.All(found.Events, e => Assert.Equal(DateTimeOffset.UnixEpoch, e.RecordedAt));
         Assert.Equal(
             new TaskEvent[] { new TaskCreated(T1), new TaskAssigned(Agent), new CodeGenerated(G1, Art1) },
             found.Events.Select(e => e.Event));
+    }
+
+    [Fact]
+    public async Task History_reports_the_original_stored_schema_version_for_historical_v1_and_current_v2_events()
+    {
+        var created = History(new TaskCreated(T1))[0];
+        var assigned = Of(2, new TaskAssigned(Agent));
+        var historicalV1 = Raw(3, "CodeGenerated", 1, """{"generationId":"g1","artifactRef":"artifact-1"}""");
+        var currentV2 = Raw(4, "CodeGenerated", 2, """{"generationId":"g2","artifactReference":"artifact-2"}""");
+        var (handler, _, _) = Create(Found(WorkflowStatus.Created, null, null, null, 1), [created, assigned, historicalV1, currentV2]);
+
+        var found = Assert.IsType<TaskHistoryFound>(await handler.GetHistoryAsync(T1, default));
+
+        Assert.Equal([1, 1, 1, 2], found.Events.Select(e => e.SchemaVersion));
+        Assert.Equal(new CodeGenerated(G1, Art1), found.Events[2].Event);
+        Assert.Equal(new CodeGenerated(G2, Art2), found.Events[3].Event);
     }
 
     [Theory]

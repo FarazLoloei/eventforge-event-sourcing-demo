@@ -118,6 +118,39 @@ public sealed class TaskCommandHandlerTests
     }
 
     [Fact]
+    public async Task Recording_code_generation_appends_a_schema_v2_event_with_the_artifactReference_payload()
+    {
+        var (handler, store) = Create();
+        foreach (var (command, expectedVersion) in new (TaskCommand, int)[] { (new CreateTask(T1), 0), (new AssignTask(T1, Agent), 1) })
+        {
+            Assert.IsType<CommandSucceeded>(await Run(handler, command, expectedVersion));
+        }
+
+        Assert.IsType<CommandSucceeded>(await Run(handler, new RecordCodeGenerated(T1, G1, Art1), 2));
+
+        var appended = Assert.Single(store.LastAppended);
+        Assert.Equal("CodeGenerated", appended.EventType);
+        Assert.Equal(2, appended.SchemaVersion);
+        Assert.Equal("""{"generationId":"g1","artifactReference":"artifact-1"}""", appended.Payload.GetRawText());
+    }
+
+    [Fact]
+    public async Task A_command_after_historical_v1_CodeGenerated_reads_the_history_and_appends_v1_for_other_events()
+    {
+        var (handler, store) = Create(
+            History(new TaskCreated(T1), new TaskAssigned(Agent))
+                .Append(Raw(3, "CodeGenerated", 1, """{"generationId":"g1","artifactRef":"artifact-1"}"""))
+                .ToArray());
+
+        var result = await Run(handler, new RecordTestsPassed(T1, G1), 3);
+
+        Assert.IsType<CommandSucceeded>(result);
+        var appended = Assert.Single(store.LastAppended);
+        Assert.Equal("TestsPassed", appended.EventType);
+        Assert.Equal(1, appended.SchemaVersion);
+    }
+
+    [Fact]
     public async Task A_full_lifecycle_runs_through_the_handler_and_rebuilds_to_the_expected_state()
     {
         var (handler, store) = Create();

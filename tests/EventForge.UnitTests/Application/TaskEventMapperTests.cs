@@ -10,21 +10,23 @@ public sealed class TaskEventMapperTests
 {
     private static readonly Guid Id1 = T1.Value;
 
+    // Schema versions are per event type: CodeGenerated is written as v2, every other Task event as v1.
     public static IEnumerable<object[]> GoldenEvents() =>
     [
-        [new TaskCreated(T1), "TaskCreated", """{"taskId":"11111111-1111-1111-1111-111111111111"}"""],
-        [new TaskAssigned(Agent), "TaskAssigned", """{"agentId":"agent-1"}"""],
-        [new CodeGenerated(G1, Art1), "CodeGenerated", """{"generationId":"g1","artifactRef":"artifact-1"}"""],
-        [new TestsPassed(G1), "TestsPassed", """{"generationId":"g1"}"""],
-        [new TestsFailed(G1), "TestsFailed", """{"generationId":"g1"}"""],
-        [new TaskCompleted(), "TaskCompleted", "{}"],
+        [new TaskCreated(T1), "TaskCreated", 1, """{"taskId":"11111111-1111-1111-1111-111111111111"}"""],
+        [new TaskAssigned(Agent), "TaskAssigned", 1, """{"agentId":"agent-1"}"""],
+        [new CodeGenerated(G1, Art1), "CodeGenerated", 2, """{"generationId":"g1","artifactReference":"artifact-1"}"""],
+        [new TestsPassed(G1), "TestsPassed", 1, """{"generationId":"g1"}"""],
+        [new TestsFailed(G1), "TestsFailed", 1, """{"generationId":"g1"}"""],
+        [new TaskCompleted(), "TaskCompleted", 1, "{}"],
     ];
 
     [Theory]
     [MemberData(nameof(GoldenEvents))]
-    public void Events_are_written_with_the_stable_name_schema_1_and_exact_payload(
+    public void Events_are_written_with_the_stable_name_per_type_schema_version_and_exact_payload(
         TaskEvent @event,
         string eventType,
+        int schemaVersion,
         string payload)
     {
         var eventId = Guid.NewGuid();
@@ -32,16 +34,18 @@ public sealed class TaskEventMapperTests
 
         Assert.Equal(eventId, written.EventId);
         Assert.Equal(eventType, written.EventType);
-        Assert.Equal(1, written.SchemaVersion);
+        Assert.Equal(schemaVersion, written.SchemaVersion);
         Assert.Equal(payload, written.Payload.GetRawText());
         Assert.Equal("""{"correlationId":"c-1"}""", written.Metadata.GetRawText());
     }
 
     [Theory]
     [MemberData(nameof(GoldenEvents))]
-    public void Written_events_read_back_to_the_same_event(TaskEvent @event, string eventType, string payload)
+    public void Written_events_read_back_to_the_same_event(
+        TaskEvent @event, string eventType, int schemaVersion, string payload)
     {
         _ = eventType;
+        _ = schemaVersion;
         _ = payload;
 
         var stored = Of(1, @event);
@@ -51,12 +55,59 @@ public sealed class TaskEventMapperTests
 
     [Theory]
     [MemberData(nameof(GoldenEvents))]
-    public void Hand_written_golden_payloads_read_as_the_expected_event(TaskEvent @event, string eventType, string payload)
+    public void Hand_written_golden_payloads_read_as_the_expected_event(
+        TaskEvent @event, string eventType, int schemaVersion, string payload)
     {
-        var stored = Raw(1, eventType, 1, payload);
+        var stored = Raw(1, eventType, schemaVersion, payload);
 
         Assert.Equal(@event, TaskEventMapper.FromStored(stored));
     }
+
+    [Fact]
+    public void Only_CodeGenerated_is_written_as_schema_v2()
+    {
+        Assert.Equal(2, TaskEventContract.CurrentSchemaVersionOf("CodeGenerated"));
+        foreach (var other in new[] { "TaskCreated", "TaskAssigned", "TestsPassed", "TestsFailed", "TaskCompleted" })
+        {
+            Assert.Equal(1, TaskEventContract.CurrentSchemaVersionOf(other));
+        }
+
+        Assert.Throws<ArgumentException>(() => TaskEventContract.CurrentSchemaVersionOf("TaskArchived"));
+    }
+
+    [Fact]
+    public void A_historical_v1_CodeGenerated_reads_as_the_same_domain_event_as_the_current_v2()
+    {
+        var v1 = Raw(3, "CodeGenerated", 1, """{"generationId":"g1","artifactRef":"artifact-1"}""");
+        var v2 = Raw(3, "CodeGenerated", 2, """{"generationId":"g1","artifactReference":"artifact-1"}""");
+
+        Assert.Equal(new CodeGenerated(G1, Art1), TaskEventMapper.FromStored(v1));
+        Assert.Equal(TaskEventMapper.FromStored(v1), TaskEventMapper.FromStored(v2));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(3)]
+    public void An_unsupported_CodeGenerated_schema_version_is_rejected(int schemaVersion) =>
+        AssertFails(
+            Raw(1, "CodeGenerated", schemaVersion, """{"generationId":"g1","artifactReference":"a"}"""),
+            InvalidHistoryReason.UnsupportedSchemaVersion);
+
+    [Theory]
+    [InlineData("""{"generationId":"g1","artifactRef":"a"}""")]                         // v1 name in v2
+    [InlineData("""{"generationId":"g1","artifactReference":"a","x":"y"}""")]
+    [InlineData("""{"generationId":"g1"}""")]
+    [InlineData("""{"generationId":"g1","artifactReference":null}""")]
+    [InlineData("""{"generationId":"g1","ArtifactReference":"a"}""")]
+    public void A_malformed_v2_CodeGenerated_payload_is_rejected(string payload) =>
+        AssertFails(Raw(1, "CodeGenerated", 2, payload), InvalidHistoryReason.MalformedPayload);
+
+    [Fact]
+    public void A_v1_CodeGenerated_with_the_v2_property_name_is_rejected() =>
+        AssertFails(
+            Raw(1, "CodeGenerated", 1, """{"generationId":"g1","artifactReference":"a"}"""),
+            InvalidHistoryReason.MalformedPayload);
 
     private static void AssertFails(StoredEvent stored, InvalidHistoryReason reason)
     {
@@ -79,6 +130,15 @@ public sealed class TaskEventMapperTests
     [InlineData(-1)]
     public void An_unsupported_schema_version_is_rejected(int schemaVersion) =>
         AssertFails(Raw(1, "TaskCompleted", schemaVersion, "{}"), InvalidHistoryReason.UnsupportedSchemaVersion);
+
+    [Theory]
+    [InlineData("TaskCreated", """{"taskId":"11111111-1111-1111-1111-111111111111"}""")]
+    [InlineData("TaskAssigned", """{"agentId":"agent-1"}""")]
+    [InlineData("TestsPassed", """{"generationId":"g1"}""")]
+    [InlineData("TestsFailed", """{"generationId":"g1"}""")]
+    [InlineData("TaskCompleted", "{}")]
+    public void Schema_v2_is_rejected_for_the_five_events_that_stay_at_v1(string eventType, string payload) =>
+        AssertFails(Raw(1, eventType, 2, payload), InvalidHistoryReason.UnsupportedSchemaVersion);
 
     [Fact]
     public void A_foreign_stream_type_is_rejected() =>
